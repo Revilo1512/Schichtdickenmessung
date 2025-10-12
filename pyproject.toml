@@ -1,7 +1,13 @@
 [project]
 name = "schichtdickenmessung"
 version = "0.1.0"
-description = "Add your description here"
+authors = [
+  { name="Oliver Klager", email="oliver.klager@stud.hcw.fh-campuswien.ac.at" },
+]
+description = "An application for measuring layer thickness."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
