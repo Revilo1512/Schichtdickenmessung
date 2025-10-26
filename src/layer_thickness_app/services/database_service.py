@@ -3,9 +3,9 @@ from typing import Dict, Any, List, Optional
 
 class DatabaseService:
     """
-    Manages all database operations for storing and retrieving measurements
-    using an SQLite3 database.
+    Manages all database operations for storing and retrieving measurements using an SQLite3 database.
     """
+
     def __init__(self, db_path: str):
         """
         Initializes the database connection and creates the table if it doesn't exist.
@@ -61,20 +61,6 @@ class DatabaseService:
             print(f"Error saving measurement: {e}")
             return -1
 
-    def get_measurements(self) -> List[Dict[str, Any]]:
-        """
-        Retrieves all measurement records from the database, ordered by date descending.
-        """
-        try:
-            # --- THE FIX IS HERE ---
-            # Add 'id DESC' as a secondary sort to handle records with the same timestamp.
-            self.cursor.execute("SELECT * FROM measurements ORDER BY Date DESC, id DESC")
-            rows = self.cursor.fetchall()
-            return [dict(row) for row in rows]
-        except sqlite3.Error as e:
-            print(f"Error fetching measurements: {e}")
-            return []
-
     def get_measurement(self, measurement_id: int) -> Optional[Dict[str, Any]]:
         """
         Retrieves a single measurement record by its ID.
@@ -86,6 +72,100 @@ class DatabaseService:
         except sqlite3.Error as e:
             print(f"Error fetching measurement with id {measurement_id}: {e}")
             return None
+        
+    def get_measurements(
+        self,
+        name_filter: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        page: int = 1,
+        per_page: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves a paginated and filtered list of measurement records.
+        """
+        query = "SELECT * FROM measurements"
+        where_clauses = []
+        params = {}
+
+        if name_filter:
+            where_clauses.append("Name LIKE :name")
+            params["name"] = f"%{name_filter}%"
+
+        if start_date:
+            # Use DATE() function to compare just the date part
+            where_clauses.append("DATE(Date) >= :start_date")
+            params["start_date"] = start_date
+
+        if end_date:
+            where_clauses.append("DATE(Date) <= :end_date")
+            params["end_date"] = end_date
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        # Add ordering
+        query += " ORDER BY Date DESC, id DESC"
+
+        # Add pagination
+        offset = (page - 1) * per_page
+        query += " LIMIT :limit OFFSET :offset"
+        params["limit"] = per_page
+        params["offset"] = offset
+
+        try:
+            self.cursor.execute(query, params)
+            rows = self.cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            print(f"Error fetching measurements: {e}")
+            return []
+    
+    def get_measurements_count(
+        self,
+        name_filter: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> int:
+        """
+        Gets the total count of measurements matching the filters.
+        """
+        query = "SELECT COUNT(*) FROM measurements"
+        where_clauses = []
+        params = {}
+
+        if name_filter:
+            where_clauses.append("Name LIKE :name")
+            params["name"] = f"%{name_filter}%"
+        if start_date:
+            where_clauses.append("DATE(Date) >= :start_date")
+            params["start_date"] = start_date
+        if end_date:
+            where_clauses.append("DATE(Date) <= :end_date")
+            params["end_date"] = end_date
+
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
+
+        try:
+            self.cursor.execute(query, params)
+            count = self.cursor.fetchone()[0]
+            return count
+        except sqlite3.Error as e:
+            print(f"Error counting measurements: {e}")
+            return 0
+
+    def get_unique_names(self) -> List[str]:
+        """
+        Retrieves a list of all unique names for filter suggestions.
+        """
+        try:
+            self.cursor.execute("SELECT DISTINCT Name FROM measurements WHERE Name IS NOT NULL ORDER BY Name")
+            rows = self.cursor.fetchall()
+            return [row["Name"] for row in rows]
+        except sqlite3.Error as e:
+            print(f"Error fetching unique names: {e}")
+            return []
 
     def delete_measurement(self, measurement_id: int) -> bool:
         """
@@ -103,3 +183,4 @@ class DatabaseService:
         """Closes the database connection."""
         if self.conn:
             self.conn.close()
+

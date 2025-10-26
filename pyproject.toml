@@ -7,7 +7,16 @@ authors = [
 description = "An application for measuring layer thickness."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+  "opencv-python",
+  "PyQt6",
+  "refractiveindex2",
+  "pyueye"
+]
+[project.optional-dependencies]
+dev = [
+  "pytest"
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,5 +1,4 @@
-import sys, os
-from PyQt6.QtWidgets import QApplication
+import os
 from PyQt6.QtGui import QIcon
 from qfluentwidgets import FluentWindow, FluentIcon, setTheme, Theme
 
@@ -9,9 +8,10 @@ from layer_thickness_app.gui.widgets.home_page import HomePage
 from layer_thickness_app.gui.widgets.history_page import HistoryPage
 from layer_thickness_app.gui.widgets.csv_page import CSVPage
 from layer_thickness_app.gui.widgets.measure_page import MeasurePage
+from layer_thickness_app.services.database_service import DatabaseService
 
 class MainWindow(FluentWindow):
-    def __init__(self):
+    def __init__(self, db_service: DatabaseService):
         super().__init__()
 
         # Set the application title and icon
@@ -25,8 +25,8 @@ class MainWindow(FluentWindow):
         # Create instances of each page
         self.home_interface = HomePage()
         self.measure_interface = MeasurePage()
-        self.history_interface = HistoryPage()
-        self.export_import_interface = CSVPage()
+        self.history_interface = HistoryPage(db_service)
+        self.csv_interface = CSVPage()
         self.help_interface = HelpPage()
         self.settings_interface = SettingsPage()
 
@@ -35,17 +35,9 @@ class MainWindow(FluentWindow):
         self.navigationInterface.addSeparator()
         self.addSubInterface(self.measure_interface, FluentIcon.STOP_WATCH, "Measure")
         self.addSubInterface(self.history_interface, FluentIcon.HISTORY, "History")
-        self.addSubInterface(self.export_import_interface, FluentIcon.DOCUMENT, "Ex-/Import")
+        self.addSubInterface(self.csv_interface, FluentIcon.DOCUMENT, "Ex-/Import")
+        # fixed bottom
         self.addSubInterface(self.help_interface, FluentIcon.HELP, "Help", position=1)
         self.addSubInterface(self.settings_interface, FluentIcon.SETTING, "Settings", position=1)
         
         self.resize(1100, 800)
-
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    
-    #setTheme(cfg.themeMode.value)
-    setTheme(Theme.LIGHT)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())

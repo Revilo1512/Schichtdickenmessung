@@ -1,7 +1,12 @@
+import base64
+import cv2
+import numpy as np
+from typing import Dict, Any
+
 # import gui
 from layer_thickness_app.gui.main_window import MainWindow
 
-# import all services
+# import services
 from layer_thickness_app.services.camera_service import CameraService
 from layer_thickness_app.services.database_service import DatabaseService
 from layer_thickness_app.services.material_service import MaterialService
@@ -9,25 +14,33 @@ from layer_thickness_app.services.calculation_service import CalculationService
 from layer_thickness_app.services.export_service import ExportService
 from layer_thickness_app.services.import_service import ImportService
 
+
 class MainController:
     """
     The central controller that manages the GUI and services.
+    Connects the signals to functions.
     """
     def __init__(self):
         # The controller "owns" all the major objects in the application.
-        self.view = MainWindow()
-        self.camera_service = CameraService()
+
         self.db_service = DatabaseService("data/measurements.db")
-        self.material_service = MaterialService()
-        self.calculation_service = CalculationService()
         self.export_service = ExportService(self.db_service)
         self.import_service = ImportService(self.db_service)
+        self.material_service = MaterialService()
+        self.calculation_service = CalculationService()
+        self.camera_service = CameraService()
+
+        self.view = MainWindow(self.db_service)
 
         # Store the view's pages for easy access
         self.measurement_page = self.view.measure_interface
+        try:
+            data = self.material_service.get_material_data()
+            self.measurement_page.populate_material_selector(data)
+        except Exception as e:
+            print(f"Controller: An error occurred - {e}")
+            print("Couldn't load material data")
         
-        # This is the core of the controller's logic. It tells the application
-        # what to do when the user interacts with the GUI.
         self._connect_signals()
 
     def show_window(self):
@@ -36,49 +49,164 @@ class MainController:
 
     def _connect_signals(self):
         """Connects all the UI signals to the controller's methods."""
-        # Get the 'Start Measurement' button from the measurement page and connect its
-        # 'clicked' signal to the 'on_start_measurement' method.
-        #self.measurement_page.measure_button.clicked.connect(self.on_start_measurement)
         
-        # You would connect other signals here, for example:
-        # self.view.export_button.clicked.connect(self.on_export_data)
-        # self.view.material_dropdown.currentTextChanged.connect(self.on_material_selected)
-        pass
-    # --- 4. Define the methods (slots) that handle the logic ---
+        if hasattr(self.measurement_page, 'calculate_button'):
+            self.measurement_page.calculate_button.clicked.connect(self.on_start_calc)
+        
+        if hasattr(self.measurement_page, 'ref_image_button'):
+            self.measurement_page.ref_image_button.clicked.connect(self.on_take_reference_image)
+            
+        if hasattr(self.measurement_page, 'mat_image_button'):
+            self.measurement_page.mat_image_button.clicked.connect(self.on_take_material_image)
+        
+        # TODO: Connect self.measurement_page.reset_button
     
-    def on_start_measurement(self):
+    def on_start_calc(self):
         """
-        This method is triggered when the user clicks the 'Start Measurement' button.
-        It orchestrates the entire measurement process.
+        Triggered when the user clicks the 'Calculate' button.
+        Orchestrates the entire calculation process and saves if requested.
         """
-        print("Controller: Received start measurement signal.")
+        print("Controller: Calculation started...")
+        self.measurement_page.set_result_text("Calculating...")
+
+
+        # --- 1. Get Data from View ---
+        try:
+            ref_image = self.measurement_page.reference_image
+            mat_image = self.measurement_page.material_image
+            material_path = self.measurement_page.material_selector.get_selected_path()
+            wavelength_um = self.measurement_page.wavelength_combo.currentData() 
+        except Exception as e:
+            print(f"Controller: ERROR - Could not get data from UI: {e}")
+            self.measurement_page.set_result_text("Error: UI components missing.")
+            return
+        
+
+        # --- 2. Validate Data ---
+        if ref_image is None or mat_image is None:
+            print("Controller: ERROR - Reference or material image is missing.")
+            self.measurement_page.set_result_text("Error: Missing one or both images.")
+            return
+            
+        if material_path is None:
+            print("Controller: ERROR - No material dataset selected.")
+            self.measurement_page.set_result_text("Error: No material selected.")
+            return
+            
+        if wavelength_um is None:
+            print("Controller: ERROR - No wavelength selected.")
+            self.measurement_page.set_result_text("Error: No wavelength selected.")
+            return
         
         try:
-            # Step A: Get data from services
-            # In a real app, you'd get the selected material from the GUI
-            material_id = "sio2" 
-            material_properties = self.material_service.get_material_by_id(material_id)
-            if not material_properties:
-                self.measurement_page.result_label.setText("Error: Material not found.")
-                return
+            shelf, book, page = material_path.split('/')
+        except ValueError:
+            error_msg = f"Internal Error: Invalid material path format: {material_path}"
+            print(f"Controller: ERROR - {error_msg}")
+            self.measurement_page.set_result_text(error_msg)
+            return
+            
+        print(f"Controller: Validated data. Calculating with:\n  Material: {material_path}\n  Wavelength: {wavelength_um}µm")
 
-            # Step B: Interact with hardware via a service
-            image_data = self.camera_service.capture_image()
-            if image_data is None:
-                self.measurement_page.result_label.setText("Error: Failed to capture image.")
-                return
-
-            # Step C: Perform calculations via a service
-            thickness = self.calculation_service.calculate_thickness(image_data, material_properties)
-
-            # Step D: Save results via a service
-            self.db_service.save_measurement(material_id, thickness)
-            print(f"Controller: Saved measurement to DB: {thickness} nm")
-
-            # Step E: Update the View with the final result
-            self.measurement_page.result_label.setText(f"Measured Thickness: <b>{thickness:.2f} nm</b>")
+        # --- 3. Call Service and Display Result ---
+        try:
+            thickness_nm, error_msg = self.calculation_service.calculate_thickness(
+                ref_image, mat_image, shelf, book, page, wavelength_um
+            )
+            
+            if error_msg:
+                print(f"Controller: ERROR - {error_msg}")
+                self.measurement_page.set_result_text(error_msg)
+            else:
+                result_text = f"{thickness_nm:.2f} nm"
+                print(f"Controller: Calculation successful. Result: {result_text}")
+                self.measurement_page.set_result_text(f"<b>{result_text}</b>")
+                
+                # --- 4. Save to Database (if checked) ---
+                if self.measurement_page.save_measurement_checkbox.isChecked():
+                    self._save_measurement_to_db(
+                        thickness=thickness_nm,
+                        ref_image=ref_image,
+                        mat_image=mat_image,
+                        shelf=shelf,
+                        book=book,
+                        page=page
+                    )
+                    # Append "Saved!" to the result
+                    self.measurement_page.set_result_text(result_text, append=True)
 
         except Exception as e:
-            # Handle potential errors from any of the services
-            print(f"Controller: An error occurred - {e}")
-            self.measurement_page.result_label.setText(f"Error: {e}")
+            # Catch any unexpected errors from the service
+            error_str = f"Unhandled Error: {e}"
+            print(f"Controller: UNHANDLED EXCEPTION in calculation: {e}")
+            self.measurement_page.set_result_text(error_str)
+
+    def _save_measurement_to_db(self, thickness: float, ref_image: np.ndarray, 
+                                mat_image: np.ndarray, shelf: str, book: str, page: str):
+        """
+        Helper method to serialize images and save a measurement to the database.
+        """
+        print("Controller: Saving measurement to database...")
+        try:
+            # Get name from UI
+            if self.measurement_page.use_name_checkbox.isChecked():
+                name = self.measurement_page.name_field.text()
+                if not name:
+                    name = "Guest" # Default if box is checked but field is empty
+            else:
+                name = "Guest"
+
+            # Serialize images to Base64 text
+            _, ref_img_encoded = cv2.imencode('.png', ref_image)
+            ref_img_b64 = base64.b64encode(ref_img_encoded).decode('utf-8')
+            
+            _, mat_img_encoded = cv2.imencode('.png', mat_image)
+            mat_img_b64 = base64.b64encode(mat_img_encoded).decode('utf-8')
+
+            # Create data dictionary matching database schema
+            db_data = {
+                "Name": name,
+                "Layer": thickness,
+                "RefImage": ref_img_b64,
+                "MatImage": mat_img_b64,
+                "Shelf": shelf,
+                "Book": book,
+                "Page": page
+            }
+            
+            # Call database service
+            row_id = self.db_service.save_measurement(db_data)
+            print(f"Controller: Measurement saved successfully with ID: {row_id}")
+
+        except Exception as e:
+            print(f"Controller: ERROR - Failed to save measurement: {e}")
+            self.measurement_page.set_result_text("Error: Failed to save measurement.", append=True)
+
+    def on_take_reference_image(self):
+        """Handles the 'Take ReferenceImage' button click."""
+        print("Controller: Taking Reference Image...")
+        self.measurement_page.set_result_text("Taking Reference Image...") # Give feedback
+        image_data = self.camera_service.capture_image()
+        
+        if image_data is not None:
+            self.measurement_page.set_image(image_data, "reference")
+            print("Controller: Reference Image captured and displayed.")
+            self.measurement_page.set_result_text("Result...") # Reset result text
+        else:
+            print("Controller: ERROR - Failed to capture reference image.")
+            self.measurement_page.set_result_text("Error: Failed to capture reference image.")
+
+    def on_take_material_image(self):
+        """Handles the 'Take Material Image' button click."""
+        print("Controller: Taking Material Image...")
+        self.measurement_page.set_result_text("Taking Material Image...") # Give feedback
+        image_data = self.camera_service.capture_image()
+        
+        if image_data is not None:
+            self.measurement_page.set_image(image_data, "material")
+            print("Controller: Material Image captured and displayed.")
+            self.measurement_page.set_result_text("Result...") # Reset result text
+        else:
+            print("Controller: ERROR - Failed to capture material image.")
+            self.measurement_page.set_result_text("Error: Failed to capture material image.")
+    
