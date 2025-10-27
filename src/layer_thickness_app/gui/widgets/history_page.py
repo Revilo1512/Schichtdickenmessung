@@ -1,12 +1,16 @@
-import sys
-from PyQt6.QtCore import Qt, QDate
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableWidgetItem, QAbstractItemView, QHeaderView
-from qfluentwidgets import (
-    BodyLabel, CaptionLabel, ComboBox, DatePicker, PrimaryPushButton,
-    PushButton, TableWidget, ToolButton, FluentIcon, SubtitleLabel
-)
+import os
 from typing import List, Dict, Any
+from PyQt6.QtCore import Qt, QDate
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, 
+                             QTableWidgetItem, QAbstractItemView, QHeaderView)
+from qfluentwidgets import (
+    BodyLabel, CaptionLabel, ComboBox, 
+    DatePicker, PrimaryPushButton, PushButton, 
+    TableWidget, ToolButton, FluentIcon, SubtitleLabel
+)
+
 from layer_thickness_app.services.database_service import DatabaseService
+
 
 class HistoryPage(QWidget):
     """
@@ -19,13 +23,13 @@ class HistoryPage(QWidget):
 
         # Pagination state
         self.current_page = 1
-        self.items_per_page = 20  # Show 20 items per page
+        self.items_per_page = 20
         self.total_items = 0
         self.total_pages = 1
 
         # Define table headers (must match DB columns)
-        self.headers = ["id", "Date", "Name", "Layer", "RefImage", "MatImage", "Shelf", "Book", "Page"]
-        self.header_labels = ["ID", "Date", "Name", "Layer", "Ref Image", "Mat Image", "Shelf", "Book", "Page"]
+        self.headers = ["id", "Date", "Name", "Layer", "Wavelength", "Shelf", "Book", "Page"]
+        self.header_labels = ["ID", "Date", "Name", "Layer (nm)", "λ (µm)", "Shelf", "Book", "Page"]
 
         # --- UI Initialization ---
         self._init_widgets()
@@ -34,7 +38,7 @@ class HistoryPage(QWidget):
 
         # --- Initial Data Load ---
         self._load_name_suggestions()
-        #self._refresh_data()
+        self._refresh_data() # Load data on startup
 
     def _init_widgets(self):
         """Initialize all UI widgets."""
@@ -42,21 +46,26 @@ class HistoryPage(QWidget):
 
         # Name Filter (with suggestions)
         self.name_filter = ComboBox(self)
-        self.name_filter.setPlaceholderText("Filter by name...")
-        self.name_filter.setEnabled(True)
+        #self.name_filter.setPlaceholderText("Filter by name...")
+        self.name_filter.setEnabled(True) # Allow typing custom names
 
         # Date Filters
         self.start_date_filter = DatePicker(self)
-        #self.start_date_filter.setDefault("Start date")
-        #self.start_date_filter.clear() # Start empty
+        self.start_date_filter.setDate(QDate()) # Set to invalid date
 
         self.end_date_filter = DatePicker(self)
-        #self.end_date_filter.setDefault("End date")
-        #self.end_date_filter.clear() # Start empty
+        self.end_date_filter.setDate(QDate()) # Set to invalid date
+
+        # Sort Order
+        self.sort_order_combo = ComboBox(self)
+        self.sort_order_combo.addItems(["Newest First", "Oldest First"])
+        self.sort_order_combo.setCurrentIndex(0)
 
         # Filter Buttons
         self.filter_button = PrimaryPushButton("Apply Filters", self)
         self.reset_button = PushButton("Reset", self)
+        self.refresh_button = ToolButton(FluentIcon.SYNC, self)
+        self.refresh_button.setToolTip("Refresh data")
 
         # Data Table
         self.table = TableWidget(self)
@@ -66,14 +75,18 @@ class HistoryPage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive) # Allow ID resize
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        # Allow resizing of key columns
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive) # ID
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive) # Date
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive) # Name
+        self.table.setColumnWidth(0, 80)
+        self.table.setColumnWidth(1, 160)
+        self.table.setColumnWidth(2, 120)
 
 
         # Pagination Controls
-        #self.prev_button = ToolButton(FluentIcon.CHEVRON_D, self)
-        self.next_button = ToolButton(FluentIcon.CHEVRON_RIGHT, self)
+        self.prev_button = ToolButton(FluentIcon.LEFT_ARROW, self)
+        self.next_button = ToolButton(FluentIcon.RIGHT_ARROW, self)
         self.page_label = CaptionLabel("Page 1 of 1", self)
         self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -87,6 +100,7 @@ class HistoryPage(QWidget):
         filter_layout = QHBoxLayout()
         filter_layout.addWidget(self.filter_title)
         filter_layout.addSpacing(10)
+        filter_layout.addWidget(BodyLabel("Name:", self))
         filter_layout.addWidget(self.name_filter, 1)
         filter_layout.addSpacing(10)
         filter_layout.addWidget(BodyLabel("From:", self))
@@ -94,15 +108,19 @@ class HistoryPage(QWidget):
         filter_layout.addSpacing(5)
         filter_layout.addWidget(BodyLabel("To:", self))
         filter_layout.addWidget(self.end_date_filter)
+        filter_layout.addStretch(1)
+        filter_layout.addWidget(BodyLabel("Sort:", self))
+        filter_layout.addWidget(self.sort_order_combo)
         filter_layout.addSpacing(10)
         filter_layout.addWidget(self.filter_button)
         filter_layout.addWidget(self.reset_button)
-        filter_layout.addStretch(2)
+        filter_layout.addWidget(self.refresh_button)
+        filter_layout.addStretch(1)
 
         # Pagination layout
         nav_layout = QHBoxLayout()
         nav_layout.addStretch(1)
-        #nav_layout.addWidget(self.prev_button)
+        nav_layout.addWidget(self.prev_button)
         nav_layout.addWidget(self.page_label)
         nav_layout.addWidget(self.next_button)
         nav_layout.addStretch(1)
@@ -116,11 +134,10 @@ class HistoryPage(QWidget):
         """Connect widget signals to slots."""
         self.filter_button.clicked.connect(self._on_filter_apply)
         self.reset_button.clicked.connect(self._on_filter_reset)
-        #self.prev_button.clicked.connect(self._on_prev_page)
+        self.refresh_button.clicked.connect(self._on_filter_apply) # Refresh re-applies
+        self.sort_order_combo.currentIndexChanged.connect(self._on_filter_apply)
+        self.prev_button.clicked.connect(self._on_prev_page)
         self.next_button.clicked.connect(self._on_next_page)
-        
-        # Optional: Allow pressing Enter in name filter to apply
-        #self.name_filter.lineEdit().returnPressed.connect(self._on_filter_apply)
 
     def _load_name_suggestions(self):
         """Fetches unique names from DB and populates the ComboBox."""
@@ -128,6 +145,7 @@ class HistoryPage(QWidget):
         self.name_filter.clear()
         self.name_filter.addItems(names)
         self.name_filter.setCurrentIndex(-1) # Clear selection
+        self.name_filter.setText("") # Clear text
 
     def _on_filter_apply(self):
         """Resets to page 1 and refreshes data based on filters."""
@@ -137,9 +155,10 @@ class HistoryPage(QWidget):
     def _on_filter_reset(self):
         """Clears all filters, resets to page 1, and refreshes."""
         self.name_filter.setCurrentIndex(-1)
-        #self.name_filter.clearEditText()
-        #self.start_date_filter.clear()
-        #self.end_date_filter.clear()
+        self.name_filter.setText("")
+        self.start_date_filter.setDate(QDate()) # Set to invalid date
+        self.end_date_filter.setDate(QDate())   # Set to invalid date
+        self.sort_order_combo.setCurrentIndex(0) # Reset sort
         self.current_page = 1
         self._refresh_data()
 
@@ -155,23 +174,36 @@ class HistoryPage(QWidget):
             self.current_page += 1
             self._refresh_data()
 
+    def _get_current_filters(self) -> Dict[str, Any]:
+        """Helper to get all filter values."""
+        name = self.name_filter.text()
+        if not name:
+            name = None
+            
+        start_date_q = self.start_date_filter.date
+        start_date_str = start_date_q.toString("yyyy-MM-dd") if start_date_q.isValid() else None
+        
+        end_date_q = self.end_date_filter.date
+        end_date_str = end_date_q.toString("yyyy-MM-dd") if end_date_q.isValid() else None
+        
+        return {
+            "name_filter": name,
+            "start_date": start_date_str,
+            "end_date": end_date_str
+            # Shelf/Book/Page filters are not on this page
+        }
+
     def _refresh_data(self):
         """
         Fetches the correct data from the DB based on filters and
         current page, then updates the table and pagination controls.
         """
         # 1. Get filter values
-        name = self.name_filter.text()
-        start_date_q = self.start_date_filter.date()
-        #start_date_str = start_date_q.toString("yyyy-MM-dd") if start_date_q.isValid() else None
-        
-        end_date_q = self.end_date_filter.date()
-        #end_date_str = end_date_q.toString("yyyy-MM-dd") if end_date_q.isValid() else None
+        filters = self._get_current_filters()
+        sort_dir = "DESC" if self.sort_order_combo.currentIndex() == 0 else "ASC"
 
         # 2. Update total count and pages
-        self.total_items = self.db_service.get_measurements_count(
-            #name, start_date_str, end_date_str
-        )
+        self.total_items = self.db_service.get_measurements_count(**filters)
         self.total_pages = max(1, (self.total_items + self.items_per_page - 1) // self.items_per_page)
         
         # Adjust current page if it's now out of bounds (e.g., after filtering)
@@ -179,7 +211,11 @@ class HistoryPage(QWidget):
 
         # 3. Fetch data for the current page
         measurements = self.db_service.get_measurements(
-            #name, start_date_str, end_date_str, self.current_page, self.items_per_page
+            **filters,
+            page_num=self.current_page, 
+            per_page=self.items_per_page,
+            order_by="Date",
+            order_dir=sort_dir
         )
 
         # 4. Populate the table
@@ -187,7 +223,7 @@ class HistoryPage(QWidget):
 
         # 5. Update pagination controls
         self.page_label.setText(f"Page {self.current_page} of {self.total_pages}")
-        #self.prev_button.setEnabled(self.current_page > 1)
+        self.prev_button.setEnabled(self.current_page > 1)
         self.next_button.setEnabled(self.current_page < self.total_pages)
         
     def _populate_table(self, measurements: List[Dict[str, Any]]):
@@ -201,12 +237,14 @@ class HistoryPage(QWidget):
                 
                 # Format floating point numbers nicely
                 if key == 'Layer' and isinstance(value, float):
-                    item = QTableWidgetItem(f"{value:.4f}")
+                    item = QTableWidgetItem(f"{value:.2f}")
+                elif key == 'Wavelength' and isinstance(value, float):
+                    item = QTableWidgetItem(f"{value:.3f}")
                 else:
                     item = QTableWidgetItem(str(value))
                 
-                # Center-align numbers
-                if key in ('id', 'Layer'):
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                # Center-align items (optionally choose which)
+                #if key in ('id', 'Layer', 'Wavelength'):
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 
                 self.table.setItem(row_idx, col_idx, item)

@@ -13,6 +13,7 @@ from layer_thickness_app.services.material_service import MaterialService
 from layer_thickness_app.services.calculation_service import CalculationService
 from layer_thickness_app.services.export_service import ExportService
 from layer_thickness_app.services.import_service import ImportService
+from layer_thickness_app.config.config import AppConfig # Use new config
 
 
 class MainController:
@@ -20,8 +21,9 @@ class MainController:
     The central controller that manages the GUI and services.
     Connects the signals to functions.
     """
-    def __init__(self):
+    def __init__(self, config: AppConfig):
         # The controller "owns" all the major objects in the application.
+        self.config = config
 
         self.db_service = DatabaseService("data/measurements.db")
         self.export_service = ExportService(self.db_service)
@@ -30,7 +32,13 @@ class MainController:
         self.calculation_service = CalculationService()
         self.camera_service = CameraService()
 
-        self.view = MainWindow(self.db_service)
+        # Pass services and config to the main window
+        self.view = MainWindow(
+            db_service=self.db_service,
+            import_service=self.import_service,
+            export_service=self.export_service,
+            config=self.config
+        )
 
         # Store the view's pages for easy access
         self.measurement_page = self.view.measure_interface
@@ -46,6 +54,8 @@ class MainController:
     def show_window(self):
         """Makes the main window visible."""
         self.view.show()
+        # Apply initial window size from config
+        self.view.apply_window_size(self.config.window_size)
 
     def _connect_signals(self):
         """Connects all the UI signals to the controller's methods."""
@@ -126,6 +136,7 @@ class MainController:
                 if self.measurement_page.save_measurement_checkbox.isChecked():
                     self._save_measurement_to_db(
                         thickness=thickness_nm,
+                        wavelength=wavelength_um, # Pass wavelength
                         ref_image=ref_image,
                         mat_image=mat_image,
                         shelf=shelf,
@@ -141,8 +152,9 @@ class MainController:
             print(f"Controller: UNHANDLED EXCEPTION in calculation: {e}")
             self.measurement_page.set_result_text(error_str)
 
-    def _save_measurement_to_db(self, thickness: float, ref_image: np.ndarray, 
-                                mat_image: np.ndarray, shelf: str, book: str, page: str):
+    def _save_measurement_to_db(self, thickness: float, wavelength: float, 
+                                ref_image: np.ndarray, mat_image: np.ndarray, 
+                                shelf: str, book: str, page: str):
         """
         Helper method to serialize images and save a measurement to the database.
         """
@@ -167,6 +179,7 @@ class MainController:
             db_data = {
                 "Name": name,
                 "Layer": thickness,
+                "Wavelength": wavelength, # Add wavelength
                 "RefImage": ref_img_b64,
                 "MatImage": mat_img_b64,
                 "Shelf": shelf,
@@ -209,4 +222,3 @@ class MainController:
         else:
             print("Controller: ERROR - Failed to capture material image.")
             self.measurement_page.set_result_text("Error: Failed to capture material image.")
-    

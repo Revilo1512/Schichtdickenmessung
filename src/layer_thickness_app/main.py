@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt, QTimer
 
 from layer_thickness_app.controller.main_controller import MainController
 from layer_thickness_app.config.config import cfg
-from qfluentwidgets import setTheme
+from qfluentwidgets import setTheme, qconfig
 
 class SplashWindow(QMainWindow):
     """Simple splash window with centered image."""
@@ -45,17 +45,14 @@ def main():
     # force render immediately
     app.processEvents()
 
-    controller = MainController()
+    # Load config and set initial theme *before* creating controller/view
+    cfg.load()
+    setTheme(cfg.theme_enum)
 
-    cfg.load("src\layer_thickness_app\config\config.json", cfg)
-    setTheme(cfg.themeMode.value)
+    controller = MainController(config=cfg)
 
     # close splash manually and show main window
     def show_main():
-        screen = app.primaryScreen().availableGeometry()
-        x = (screen.width() - 1100) // 2
-        y = (screen.height() - 800) // 2
-        controller.view.setGeometry(x, y, 1100, 800)
         controller.show_window()
         splash.close()
     

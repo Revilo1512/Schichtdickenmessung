@@ -12,5 +12,6 @@ wheels/
 # Custom
 data/*
 src/experimentation
+src/layer_thickness_app/config/config.json
 .pytest_cache
 src/layer_thickness_app/gui/resources/introduction.mp4
