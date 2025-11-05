@@ -141,4 +141,3 @@ class HelpPage(QWidget):
             self.video_player.set_source(QUrl.fromLocalFile(video_path))
         else:
             print(f"Warning: Video file not found at {video_path}")
-

@@ -157,35 +157,51 @@ class MeasurePage(QWidget):
         self._setup_main_layout()
 
     def _setup_main_layout(self):
-        main_layout = QGridLayout(self)
+        # Use a Horizontal layout for the two main columns
+        main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(40, 20, 40, 20)
         main_layout.setSpacing(20)
 
+        # --- Create all 4 widgets first ---
         self.image_capture_tl = self._create_image_capture_widget("Reference Image", "reference_image")
         self.image_capture_br = self._create_image_capture_widget("Material Image", "material_image")
-        
         self.config_and_selector_panel = self._create_config_and_selector_widget()
         self.result_panel = self._create_result_widget()
 
+        # --- Apply frame styling to all ---
         for widget in [self.image_capture_tl, self.image_capture_br, 
                        self.config_and_selector_panel, self.result_panel]:
             widget.setFrameShape(QFrame.Shape.StyledPanel)
             widget.setFrameShadow(QFrame.Shadow.Raised)
             
-
+        # --- 1. Create Left Column (for Images) ---
+        # Use a plain QWidget as a container
+        left_column_container = QWidget() 
+        left_layout = QVBoxLayout(left_column_container)
+        left_layout.setContentsMargins(0, 0, 0, 0) # No margins, card has them
+        left_layout.setSpacing(20) # Space between the two image cards
         
-        # Add the 4 widgets to the grid
-        main_layout.addWidget(self.image_capture_tl, 0, 0)
-        main_layout.addWidget(self.config_and_selector_panel, 0, 1) # Top-right
-        main_layout.addWidget(self.image_capture_br, 1, 0)
-        main_layout.addWidget(self.result_panel, 1, 1)               # Bottom-right
+        # Add image cards with a stretch factor of 1, making them 50/50 height
+        left_layout.addWidget(self.image_capture_tl, 1)
+        left_layout.addWidget(self.image_capture_br, 1)
 
-        main_layout.setColumnStretch(0, 1)
-        main_layout.setColumnStretch(1, 1)
-        main_layout.setRowStretch(0, 1)
-        main_layout.setRowStretch(1, 1)
+        # --- 2. Create Right Column (for Config/Result) ---
+        # Use a plain QWidget as a container
+        right_column_container = QWidget() 
+        right_layout = QVBoxLayout(right_column_container)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(20) # Space between config and result cards
+        
+        # Add config/result cards with a stretch factor of 1, making them 50/50 height
+        right_layout.addWidget(self.config_and_selector_panel, 1)
+        right_layout.addWidget(self.result_panel, 1)
 
-        # --- Find Widgets for Controller ---
+        # --- 3. Add Left and Right columns to the main layout ---
+        # Give each column a stretch factor of 1 to make them 50/50 width
+        main_layout.addWidget(left_column_container, 1)
+        main_layout.addWidget(right_column_container, 1)
+
+        # --- Find Widgets for Controller (no changes needed from here down) ---
         
         # Find image buttons and labels
         self.ref_image_button = self.image_capture_tl.findChild(QPushButton, "reference_image_btn")
@@ -213,7 +229,6 @@ class MeasurePage(QWidget):
         self.use_name_checkbox.toggled.connect(self._on_config_changed)
         self.save_measurement_checkbox.toggled.connect(self._on_config_changed)
         self.note_field.textChanged.connect(self._on_config_changed)
-
 
     def _create_image_capture_widget(self, title: str, button_name: str) -> QFrame:
         """Factory method to create a standardized image capture widget."""

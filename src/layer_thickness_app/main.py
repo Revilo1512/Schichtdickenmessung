@@ -8,6 +8,7 @@ from layer_thickness_app.controller.main_controller import MainController
 from layer_thickness_app.config.config import cfg
 from qfluentwidgets import setTheme, qconfig, Theme
 
+
 # --- THEME STYLESHEETS ---
 # Paths to the new QSS files
 QSS_RESOURCES_PATH = "src/layer_thickness_app/gui/resources"
@@ -73,6 +74,12 @@ def apply_app_theme(app: QApplication, theme: Theme):
 
 def main():
     app = QApplication(sys.argv)
+
+    icon_path = r"src\layer_thickness_app\gui\resources\duck_icon.svg"
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
+    else:
+        print(f"Warning: Icon file not found at {icon_path}")
     
     splash = SplashWindow("src/layer_thickness_app/gui/resources/duck_icon.svg")
     splash.show()

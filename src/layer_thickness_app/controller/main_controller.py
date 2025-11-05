@@ -2,6 +2,8 @@ import base64
 import cv2
 import numpy as np
 from typing import Dict, Any
+import os
+from PyQt6.QtGui import QIcon
 
 # import gui
 from layer_thickness_app.gui.main_window import MainWindow
@@ -40,6 +42,11 @@ class MainController:
             camera_service=self.camera_service, # Pass camera service
             config=self.config
         )
+        icon_path = r"src\layer_thickness_app\gui\resources\duck_icon.svg"
+        if os.path.exists(icon_path):
+            self.view.setWindowIcon(QIcon(icon_path))
+        else:
+            print(f"Warning: Icon file not found at {icon_path}")
 
         # Store the view's pages for easy access
         self.measurement_page = self.view.measure_interface

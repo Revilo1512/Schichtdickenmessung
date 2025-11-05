@@ -27,11 +27,6 @@ class MainWindow(FluentWindow):
 
         # Set the application title and icon
         self.setWindowTitle("Schichtdickenmessung")
-        icon_path = r"src\layer_thickness_app\gui\resources\duck_icon.svg"
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
-        else:
-            print(f"Warning: Icon file not found at {icon_path}")
 
         # Create instances of each page
         self.home_interface = HomePage(camera_service) # Pass service to HomePage
