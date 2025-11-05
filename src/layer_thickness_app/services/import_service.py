@@ -20,7 +20,7 @@ class ImportService:
 
     # Define the columns required by the save_measurement method
     # RefImage and MatImage will now be paths in the CSV, but converted to base64
-    REQUIRED_COLUMNS = {'Date', 'Name', 'Layer', 'Wavelength', 'RefImage', 'MatImage', 'Shelf', 'Book', 'Page'}
+    REQUIRED_COLUMNS = {'Date', 'Name', 'Layer', 'Wavelength', 'RefImage', 'MatImage', 'Shelf', 'Book', 'Page', 'Note'}
 
     def __init__(self, db_service: DatabaseService):
         self.db_service = db_service
@@ -79,8 +79,9 @@ class ImportService:
                     try:
                         data_to_save = {}
                         for col in self.REQUIRED_COLUMNS:
-                            data_to_save[col] = row[col]
-
+                            # Handle None for 'Note' column if it's missing in the row
+                            data_to_save[col] = row.get(col) 
+                            
                         # --- FIX for 'could not convert string to float: ''' ---
                         # 'Layer' is NOT NULL, so it must be valid
                         try:
@@ -101,7 +102,7 @@ class ImportService:
                             data_to_save['Wavelength'] = None
                         # --- END FIX ---
                         
-                        # 'Date' is already handled by the REQUIRED_COLUMNS loop
+                        # 'Date', 'Name', 'Shelf', 'Book', 'Page', 'Note' are handled by the loop
 
                         # --- 4. Convert Image Paths to Base64 ---
                         ref_img_path = os.path.join(temp_dir, row['RefImage'])

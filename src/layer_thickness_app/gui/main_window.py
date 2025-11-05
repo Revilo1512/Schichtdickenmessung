@@ -1,6 +1,6 @@
 import os
 from PyQt6.QtGui import QIcon
-from PyQt6.QtCore import Qt, QSize # Import QSize
+from PyQt6.QtCore import Qt, QSize
 from qfluentwidgets import FluentWindow, FluentIcon, setTheme, Theme
 
 from layer_thickness_app.config.config import AppConfig
@@ -13,12 +13,14 @@ from layer_thickness_app.gui.widgets.measure_page import MeasurePage
 from layer_thickness_app.services.database_service import DatabaseService
 from layer_thickness_app.services.import_service import ImportService
 from layer_thickness_app.services.export_service import ExportService
+from layer_thickness_app.services.camera_service import CameraService # Import CameraService
 
 class MainWindow(FluentWindow):
     def __init__(self, 
                  db_service: DatabaseService, 
                  import_service: ImportService, 
                  export_service: ExportService,
+                 camera_service: CameraService, # Add camera_service
                  config: AppConfig):
         super().__init__()
         self.config = config
@@ -32,7 +34,7 @@ class MainWindow(FluentWindow):
             print(f"Warning: Icon file not found at {icon_path}")
 
         # Create instances of each page
-        self.home_interface = HomePage()
+        self.home_interface = HomePage(camera_service) # Pass service to HomePage
         self.measure_interface = MeasurePage()
         self.history_interface = HistoryPage(db_service)
         # Pass services to CSVPage
@@ -54,18 +56,17 @@ class MainWindow(FluentWindow):
         # Connect config signals
         self.config.window_size_changed.connect(self.apply_window_size)
         
-        # --- MODIFICATION ---
         # Set initial size and make it fixed
         initial_w, initial_h = 1100, 800
-        # self.resize(initial_w, initial_h) # No longer needed
         self.setFixedSize(initial_w, initial_h)
-        # --- END MODIFICATION ---
+        
+        # Apply initial window size from config *after* default size is set
+        self.apply_window_size(self.config.window_size)
 
     def apply_window_size(self, size_str: str):
         """Applies the window size from the config and makes it fixed."""
         
-        # --- MODIFICATION: Unset fixed size before changes ---
-        # Set to max size to allow resizing/fullscreen
+        # Unset fixed size before changes
         max_size = QSize(16777215, 16777215)
         self.setMaximumSize(max_size)
         self.setMinimumSize(0, 0)
@@ -78,16 +79,13 @@ class MainWindow(FluentWindow):
         elif "x" in size_str:
             try:
                 w, h = map(int, size_str.split('x'))
-                # Use setFixedSize instead of resize
                 self.setFixedSize(w, h)
                 self.move_to_center()
             except Exception as e:
                 print(f"Invalid window size in config: {size_str}. Error: {e}")
-                # Use setFixedSize instead of resize
                 self.setFixedSize(1100, 800)
                 self.move_to_center()
         else:
-            # Use setFixedSize instead of resize
             self.setFixedSize(1100, 800)
             self.move_to_center()
 

@@ -6,7 +6,8 @@ from PyQt6.QtWidgets import (QWidget, QComboBox, QVBoxLayout, QLabel, QGridLayou
                              QPushButton, QFrame, QLineEdit, QCheckBox, QHBoxLayout)
 from PyQt6.QtGui import (QStandardItemModel, QStandardItem, QFont, 
                          QPixmap, QImage, QPalette, QColor)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
+from qfluentwidgets import InfoBar, InfoBarPosition
 
 class MaterialSelector(QFrame):
     """
@@ -15,6 +16,7 @@ class MaterialSelector(QFrame):
     """
     def __init__(self):
         super().__init__()
+        self.setObjectName("material_selector_frame")
         self.data = {}
         # Remove frame styling, as it will be part of a larger frame
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -140,6 +142,10 @@ class MeasurePage(QWidget):
     Main UI window for the measurement application.
     Arranges all functional components in a 2x2 grid.
     """
+    
+    # Signal to indicate configuration has changed
+    config_changed = pyqtSignal()
+    
     def __init__(self):
         super().__init__()
         self.setObjectName("measurePage")
@@ -155,29 +161,19 @@ class MeasurePage(QWidget):
         main_layout.setContentsMargins(40, 20, 40, 20)
         main_layout.setSpacing(20)
 
-        # Set the background color for the entire page (the "gutters")
-        self.setAutoFillBackground(True)
-        palette = self.palette()
-        palette.setColor(QPalette.ColorRole.Window, QColor("#CDDEEC"))
-        self.setPalette(palette)
-
         self.image_capture_tl = self._create_image_capture_widget("Reference Image", "reference_image")
         self.image_capture_br = self._create_image_capture_widget("Material Image", "material_image")
         
         self.config_and_selector_panel = self._create_config_and_selector_widget()
         self.result_panel = self._create_result_widget()
 
-        # --- Style and Add Widgets to Grid ---
         for widget in [self.image_capture_tl, self.image_capture_br, 
                        self.config_and_selector_panel, self.result_panel]:
             widget.setFrameShape(QFrame.Shape.StyledPanel)
             widget.setFrameShadow(QFrame.Shadow.Raised)
-            widget.setAutoFillBackground(True)
-            p = widget.palette()
-            p.setColor(QPalette.ColorRole.Window, QColor("white"))
-            widget.setPalette(p)
+            
 
-
+        
         # Add the 4 widgets to the grid
         main_layout.addWidget(self.image_capture_tl, 0, 0)
         main_layout.addWidget(self.config_and_selector_panel, 0, 1) # Top-right
@@ -205,9 +201,18 @@ class MeasurePage(QWidget):
         self.use_name_checkbox = self.config_and_selector_panel.findChild(QCheckBox, "use_name_checkbox")
         self.name_field = self.config_and_selector_panel.findChild(QLineEdit, "name_field")
         self.save_measurement_checkbox = self.config_and_selector_panel.findChild(QCheckBox, "save_measurement_checkbox")
+        self.note_field = self.config_and_selector_panel.findChild(QLineEdit, "note_field")
 
         # Find the result label
         self.result_label = self.result_panel.findChild(QLabel, "result_label")
+        
+        # --- Connect signals that trigger config change ---
+        self.material_selector.page_combo.currentIndexChanged.connect(self._on_config_changed)
+        self.wavelength_combo.currentIndexChanged.connect(self._on_config_changed)
+        self.name_field.textChanged.connect(self._on_config_changed)
+        self.use_name_checkbox.toggled.connect(self._on_config_changed)
+        self.save_measurement_checkbox.toggled.connect(self._on_config_changed)
+        self.note_field.textChanged.connect(self._on_config_changed)
 
 
     def _create_image_capture_widget(self, title: str, button_name: str) -> QFrame:
@@ -291,10 +296,20 @@ class MeasurePage(QWidget):
         self.save_measurement_checkbox.setFont(header_font)
         layout.addWidget(self.save_measurement_checkbox)
 
-        # --- 5. Spacer ---
+        # --- 5. Note Field ---
+        layout.addSpacing(10)
+        note_label = QLabel("Note:")
+        note_label.setFont(header_font)
+        self.note_field = QLineEdit()
+        self.note_field.setObjectName("note_field")
+        self.note_field.setPlaceholderText("Optional note...")
+        layout.addWidget(note_label)
+        layout.addWidget(self.note_field)
+
+        # --- 6. Spacer ---
         layout.addStretch(1) # Pushes buttons to the bottom
 
-        # --- 6. Action Buttons ---
+        # --- 7. Action Buttons ---
         button_layout = QHBoxLayout()
         large_button_style = "font-size: 12pt;"
 
@@ -331,6 +346,53 @@ class MeasurePage(QWidget):
         
         layout.addWidget(self.result_label)
         return frame
+
+    def _on_config_changed(self):
+        """Emits a signal that configuration has changed."""
+        self.config_changed.emit()
+
+    def reset_all(self):
+        """Resets all inputs, images, and results."""
+        # Reset images
+        self.reference_image = None
+        self.material_image = None
+        
+        # Reset previews
+        for label in [self.ref_image_label, self.mat_image_label]:
+            label.setText("Image Preview")
+            label.setStyleSheet("background-color: #2E2E2E; color: white; border: 1px solid #555;")
+            
+        # Reset config (block signals to prevent multiple emits)
+        self.wavelength_combo.blockSignals(True)
+        self.use_name_checkbox.blockSignals(True)
+        self.name_field.blockSignals(True)
+        self.save_measurement_checkbox.blockSignals(True)
+        self.note_field.blockSignals(True)
+
+        self.wavelength_combo.setCurrentIndex(0)
+        self.use_name_checkbox.setChecked(False)
+        self.name_field.setText("")
+        self.save_measurement_checkbox.setChecked(True)
+        self.note_field.setText("")
+        
+        # Unblock signals
+        self.wavelength_combo.blockSignals(False)
+        self.use_name_checkbox.blockSignals(False)
+        self.name_field.blockSignals(False)
+        self.save_measurement_checkbox.blockSignals(False)
+        self.note_field.blockSignals(False)
+            
+        # Reset material selector (this is tricky, need to reset it to the *first* item)
+        if hasattr(self, 'material_selector'):
+            self.material_selector.page_combo.blockSignals(True)
+            self.material_selector._populate_shelves() # This should reset it to the first
+            self.material_selector.page_combo.blockSignals(False)
+            
+        # Reset result
+        self.set_result_text("Result...")
+        
+        # Manually emit a single config changed to re-enable button
+        self._on_config_changed()
 
     def populate_material_selector(self, data: Dict[str, Any]):
         """Public method to pass data to the child MaterialSelector widget."""
@@ -402,3 +464,22 @@ class MeasurePage(QWidget):
                 Qt.TransformationMode.SmoothTransformation
             )
             target_label.setPixmap(scaled_pixmap)
+
+    def _show_info_bar(self, title: str, content: str, is_error: bool = False):
+        """Shows a success or error InfoBar message."""
+        if is_error:
+            InfoBar.error(
+                title=title,
+                content=content,
+                duration=5000,
+                parent=self,
+                position=InfoBarPosition.TOP
+            )
+        else:
+            InfoBar.success(
+                title=title,
+                content=content,
+                duration=3000,
+                parent=self,
+                position=InfoBarPosition.TOP
+            )

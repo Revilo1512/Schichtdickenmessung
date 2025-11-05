@@ -40,15 +40,21 @@ class DatabaseService:
                     MatImage TEXT NOT NULL,
                     Shelf TEXT NOT NULL,
                     Book TEXT NOT NULL,
-                    Page TEXT NOT NULL
+                    Page TEXT NOT NULL,
+                    Note TEXT
                 )
             """)
-            # Check and add Wavelength column if it doesn't exist (for migration)
+            # Check and add columns if they don't exist (for migration)
             self.cursor.execute("PRAGMA table_info(measurements)")
             columns = [col['name'] for col in self.cursor.fetchall()]
+            
             if 'Wavelength' not in columns:
                 print("Adding 'Wavelength' column to database...")
                 self.cursor.execute("ALTER TABLE measurements ADD COLUMN Wavelength REAL")
+            
+            if 'Note' not in columns:
+                print("Adding 'Note' column to database...")
+                self.cursor.execute("ALTER TABLE measurements ADD COLUMN Note TEXT")
 
             self.conn.commit()
         except sqlite3.Error as e:
@@ -102,7 +108,8 @@ class DatabaseService:
         end_date: Optional[str] = None,
         shelf: Optional[str] = None,
         book: Optional[str] = None,
-        page: Optional[str] = None
+        page: Optional[str] = None,
+        note_filter: Optional[str] = None
     ) -> Tuple[str, Dict[str, Any]]:
         """Helper to build WHERE clauses for filtering."""
         query = base_query
@@ -127,6 +134,9 @@ class DatabaseService:
         if page:
             where_clauses.append("Page = :page")
             params["page"] = page
+        if note_filter:
+            where_clauses.append("Note LIKE :note")
+            params["note"] = f"%{note_filter}%"
 
         if where_clauses:
             query += " WHERE " + " AND ".join(where_clauses)
@@ -141,6 +151,7 @@ class DatabaseService:
         shelf: Optional[str] = None,
         book: Optional[str] = None,
         page: Optional[str] = None,
+        note_filter: Optional[str] = None,
         page_num: int = 1,
         per_page: int = 20,
         order_by: Optional[str] = "Date",
@@ -151,11 +162,11 @@ class DatabaseService:
         """
         query, params = self._build_filter_query(
             "SELECT * FROM measurements",
-            name_filter, start_date, end_date, shelf, book, page
+            name_filter, start_date, end_date, shelf, book, page, note_filter
         )
 
         # Add ordering (with sanitation)
-        valid_columns = ('id', 'Date', 'Name', 'Layer', 'Wavelength', 'Shelf', 'Book', 'Page')
+        valid_columns = ('id', 'Date', 'Name', 'Layer', 'Wavelength', 'Shelf', 'Book', 'Page', 'Note')
         safe_order_by = order_by if order_by in valid_columns else "Date"
         safe_order_dir = order_dir if order_dir in ('ASC', 'DESC') else "DESC"
 
@@ -185,6 +196,7 @@ class DatabaseService:
         shelf: Optional[str] = None,
         book: Optional[str] = None,
         page: Optional[str] = None,
+        note_filter: Optional[str] = None,
         order_by: Optional[str] = "Date",
         order_dir: Optional[str] = "DESC"
     ) -> List[Dict[str, Any]]:
@@ -194,11 +206,11 @@ class DatabaseService:
         """
         query, params = self._build_filter_query(
             "SELECT * FROM measurements",
-            name_filter, start_date, end_date, shelf, book, page
+            name_filter, start_date, end_date, shelf, book, page, note_filter
         )
         
         # Add ordering (with sanitation)
-        valid_columns = ('id', 'Date', 'Name', 'Layer', 'Wavelength', 'Shelf', 'Book', 'Page')
+        valid_columns = ('id', 'Date', 'Name', 'Layer', 'Wavelength', 'Shelf', 'Book', 'Page', 'Note')
         safe_order_by = order_by if order_by in valid_columns else "Date"
         safe_order_dir = order_dir if order_dir in ('ASC', 'DESC') else "DESC"
 
@@ -221,14 +233,15 @@ class DatabaseService:
         end_date: Optional[str] = None,
         shelf: Optional[str] = None,
         book: Optional[str] = None,
-        page: Optional[str] = None
+        page: Optional[str] = None,
+        note_filter: Optional[str] = None
     ) -> int:
         """
         Gets the total count of measurements matching the filters.
         """
         query, params = self._build_filter_query(
             "SELECT COUNT(*) FROM measurements",
-            name_filter, start_date, end_date, shelf, book, page
+            name_filter, start_date, end_date, shelf, book, page, note_filter
         )
 
         try:
@@ -242,7 +255,7 @@ class DatabaseService:
     def _get_unique_column_values(self, column_name: str) -> List[str]:
         """Helper to get unique, non-null, ordered values from a column."""
         try:
-            self.cursor.execute(f"SELECT DISTINCT {column_name} FROM measurements WHERE {column_name} IS NOT NULL ORDER BY {column_name}")
+            self.cursor.execute(f"SELECT DISTINCT {column_name} FROM measurements WHERE {column_name} IS NOT NULL AND {column_name} != '' ORDER BY {column_name}")
             rows = self.cursor.fetchall()
             return [row[column_name] for row in rows]
         except sqlite3.Error as e:
@@ -264,6 +277,10 @@ class DatabaseService:
     def get_unique_pages(self) -> List[str]:
         """Retrieves a list of all unique pages for filter suggestions."""
         return self._get_unique_column_values("Page")
+
+    def get_unique_notes(self) -> List[str]:
+        """Retrieves a list of all unique notes for filter suggestions."""
+        return self._get_unique_column_values("Note")
 
     def delete_measurement(self, measurement_id: int) -> bool:
         """

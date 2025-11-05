@@ -1,0 +1,124 @@
+/* Light Theme for Standard PyQt Widgets */
+QWidget {
+    background-color: #f3f3f3;
+    color: #1a1a1a;
+}
+
+QLabel {
+    background-color: transparent;
+    color: #1a1a1a;
+}
+
+/* Frame with shadow (used on measure page) */
+QFrame[frameShape="6"] {
+    border: 1px solid #cccccc;
+    border-radius: 5px;
+    background-color: #f9f9f9;
+}
+
+/* Image preview placeholder */
+QLabel[objectName$="_preview"] {
+    background-color: #e0e0e0;
+    color: #1a1a1a;
+    border: 1px solid #bbbbbb;
+    border-radius: 5px;
+}
+
+/* Standard PushButton (e.g., Reset, Take Image) */
+QPushButton {
+    background-color: #e1e1e1;
+    color: #1a1a1a;
+    border: 1px solid #cccccc;
+    padding: 5px 10px;
+    border-radius: 5px;
+    min-height: 1.5em;
+}
+
+QPushButton:hover {
+    background-color: #eaeaea;
+    border: 1px solid #c1c1c1;
+}
+
+QPushButton:pressed {
+    background-color: #d0d0d0;
+}
+
+/* Primary PushButton (e.g., Calculate) */
+QPushButton[objectName="calculate_button"] {
+    background-color: #0078d4;
+    color: white;
+    font-weight: bold;
+    border: none;
+}
+QPushButton[objectName="calculate_button"]:hover {
+    background-color: #0088f0;
+}
+QPushButton[objectName="calculate_button"]:pressed {
+    background-color: #006ac0;
+}
+QPushButton[objectName="calculate_button"]:disabled {
+    background-color: #e1e1e1;
+    color: #888;
+}
+
+/* ComboBox */
+QComboBox {
+    border: 1px solid #cccccc;
+    border-radius: 5px;
+    padding: 3px 18px 3px 5px;
+    min-width: 6em;
+    background-color: #ffffff;
+    color: #1a1a1a;
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left: 1px solid #cccccc;
+}
+
+QComboBox::down-arrow {
+    image: url(../Schichtdickenmessung/src/layer_thickness_app/gui/resources/icons/arrow_down_light.svg);
+}
+
+QComboBox QAbstractItemView {
+    border: 1px solid #cccccc;
+    background-color: #ffffff;
+    color: #1a1a1a;
+    selection-background-color: #0078d4;
+}
+
+/* LineEdit and CheckBox */
+QLineEdit {
+    background-color: #ffffff;
+    color: #1a1a1a;
+    border: 1px solid #cccccc;
+    border-radius: 5px;
+    padding: 5px;
+}
+
+QCheckBox {
+    background-color: transparent;
+}
+QCheckBox::indicator {
+    width: 15px;
+    height: 15px;
+    border: 1px solid #cccccc;
+    border-radius: 3px;
+    background-color: #ffffff;
+}
+QCheckBox::indicator:checked {
+    image: url(../Schichtdickenmessung/src/layer_thickness_app/gui/resources/icons/check_light.svg);
+}
+
+/* Card in HomePage */
+QFrame[objectName="status_card"] {
+    background-color: #f3f3f3;
+    border: none;
+    border-radius: 5px;
+}
+
+QFrame[objectName="material_selector_frame"] {
+    background-color: transparent;
+}

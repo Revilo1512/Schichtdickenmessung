@@ -127,11 +127,9 @@ class HelpPage(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(40, 20, 40, 20)
         main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        
-        # --- FIX: Reordered widgets and added spacing for a cleaner look ---
         main_layout.addWidget(self.title_label)
         main_layout.addWidget(self.description_label)
-        main_layout.addSpacing(10) # Add 10px of vertical space
+        main_layout.addSpacing(10)
         main_layout.addWidget(self.video_player)
         
         # --- Load Video File ---

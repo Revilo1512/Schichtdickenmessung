@@ -38,7 +38,8 @@ class ExportService:
         end_date: Optional[str] = None,
         shelf: Optional[str] = None,
         book: Optional[str] = None,
-        page: Optional[str] = None
+        page: Optional[str] = None,
+        note_filter: Optional[str] = None
     ) -> str:
         """
         Fetches filtered measurements, creates a CSV and image folder,
@@ -51,7 +52,7 @@ class ExportService:
         print("Starting data export to ZIP...")
         
         data = self.db_service.get_all_filtered_measurements(
-            name_filter, start_date, end_date, shelf, book, page
+            name_filter, start_date, end_date, shelf, book, page, note_filter
         )
         
         if not data:
@@ -103,6 +104,11 @@ class ExportService:
             # Get headers from the first processed row and exclude 'id'
             all_headers = list(csv_data[0].keys())
             export_headers = [h for h in all_headers if h != 'id']
+            
+            # Ensure 'Note' is last if it exists, for better readability (optional)
+            if 'Note' in export_headers:
+                export_headers.remove('Note')
+                export_headers.append('Note')
 
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=export_headers, extrasaction='ignore')
