@@ -6,7 +6,7 @@ from PyQt6.QtCore import Qt, QTimer
 
 from layer_thickness_app.controller.main_controller import MainController
 from layer_thickness_app.config.config import cfg
-from qfluentwidgets import setTheme, qconfig, Theme
+from qfluentwidgets import setTheme, isDarkTheme, Theme
 
 
 # --- THEME STYLESHEETS ---
@@ -59,18 +59,44 @@ def apply_app_theme(app: QApplication, theme: Theme):
     Applies the full theme (Fluent and custom QSS) to the application.
     """
     stylesheet = ""
-    # 1. Set Fluent theme
-    setTheme(theme)
+
+    if theme == Theme.AUTO:
+        actual_theme = Theme.DARK if is_windows_dark_mode() else Theme.LIGHT
+    else:
+        actual_theme = theme
+        
+    print(f"Setting theme to: {actual_theme.value}") 
+    setTheme(actual_theme)
     
-    # 2. Load custom QSS
-    if theme == Theme.LIGHT:
+    if actual_theme == Theme.LIGHT:
         stylesheet = load_stylesheet(LIGHT_THEME_QSS)
-    elif theme == Theme.DARK:
+    elif actual_theme == Theme.DARK:
         stylesheet = load_stylesheet(DARK_THEME_QSS)
     
-    # 3. Apply custom QSS to the whole application
     app.setStyleSheet(stylesheet)
 
+def is_windows_dark_mode() -> bool:
+    """
+    Checks the Windows Registry for the "AppsUseLightTheme" setting.
+    Returns True if dark mode is enabled, False if light mode.
+    Defaults to False (light mode) if the key is not found or on non-Windows OS.
+    """
+    if sys.platform != 'win32':
+        return False  # Default to light mode on non-Windows
+        
+    try:
+        import winreg
+        # Registry path for the "app mode" theme setting
+        key_path = r'SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+        key_name = 'AppsUseLightTheme'
+        
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            value, _ = winreg.QueryValueEx(key, key_name)
+            # value is 0 for Dark Mode, 1 for Light Mode
+            return value == 0
+    except (FileNotFoundError, OSError, ImportError):
+        # Key might not exist, or winreg is not available
+        return False # Default to light mode
 
 def main():
     app = QApplication(sys.argv)

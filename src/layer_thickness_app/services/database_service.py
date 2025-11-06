@@ -1,5 +1,6 @@
 import sqlite3
 from typing import Dict, Any, List, Optional, Tuple
+from pathlib import Path  # <-- Import Path from pathlib
 
 class DatabaseService:
     """
@@ -9,19 +10,28 @@ class DatabaseService:
     def __init__(self, db_path: str):
         """
         Initializes the database connection and creates the table if it doesn't exist.
+        Ensures the directory for the db_path exists.
 
         Args:
             db_path (str): The file path for the SQLite database.
         """
         try:
             self.db_path = db_path
+            
+            # --- ADDED: Ensure the parent directory exists ---
+            # sqlite3.connect() will create the file, but not the folder.
+            db_parent_dir = Path(self.db_path).parent
+            db_parent_dir.mkdir(parents=True, exist_ok=True)
+            # --- END ADDED ---
+
             # Enable multi-threaded access
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
             self.cursor = self.conn.cursor()
             self._create_table()
-        except sqlite3.Error as e:
-            print(f"Database connection error: {e}")
+        # Updated to catch OS-level errors (e.g., permissions) as well
+        except (sqlite3.Error, OSError) as e: 
+            print(f"Database connection/setup error at {db_path}: {e}")
             raise
 
     def _create_table(self):
@@ -254,7 +264,12 @@ class DatabaseService:
 
     def _get_unique_column_values(self, column_name: str) -> List[str]:
         """Helper to get unique, non-null, ordered values from a column."""
+        # Ensure column_name is safe (basic sanitation)
+        if not column_name.isalnum():
+             print(f"Invalid column name requested: {column_name}")
+             return []
         try:
+            # Use f-string safely as we've validated the column_name
             self.cursor.execute(f"SELECT DISTINCT {column_name} FROM measurements WHERE {column_name} IS NOT NULL AND {column_name} != '' ORDER BY {column_name}")
             rows = self.cursor.fetchall()
             return [row[column_name] for row in rows]

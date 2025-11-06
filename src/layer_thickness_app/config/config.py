@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path  # <-- Import Path
 from PyQt6.QtCore import QObject, pyqtSignal
 from qfluentwidgets import Theme
 
@@ -37,11 +38,16 @@ class AppConfig(QObject):
 
     def load(self):
         """Loads the config file or creates it with defaults if it doesn't exist."""
+        try:
+            config_parent_dir = Path(self.config_path).parent
+            config_parent_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            print(f"Error creating config directory {config_parent_dir}: {e}")
+            
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     self._config_data = json.load(f)
-                # Ensure all keys are present
                 for key, value in self.DEFAULT_CONFIG.items():
                     self._config_data.setdefault(key, value)
             except json.JSONDecodeError:
@@ -56,6 +62,9 @@ class AppConfig(QObject):
     def save(self):
         """Saves the current configuration to the JSON file."""
         try:
+            config_parent_dir = Path(self.config_path).parent
+            config_parent_dir.mkdir(parents=True, exist_ok=True)
+            
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(self._config_data, f, indent=4)
         except IOError as e:

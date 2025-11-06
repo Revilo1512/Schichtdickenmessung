@@ -47,7 +47,7 @@ class HistoryPage(QWidget):
         self.name_filter.setPlaceholderText("Filter by name...")
 
         self.start_date_filter = DatePicker(self)
-        self.start_date_filter.setDate(QDate(2024, 1, 1)) 
+        self.start_date_filter.setDate(QDate(2024, 1, 1))
 
         self.end_date_filter = DatePicker(self)
         self.end_date_filter.setDate(QDate(2030, 12, 31))

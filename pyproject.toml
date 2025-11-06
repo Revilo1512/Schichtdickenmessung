@@ -11,7 +11,8 @@ dependencies = [
   "opencv-python",
   "PyQt6",
   "refractiveindex2",
-  "pyueye"
+  "pyueye",
+  "PyQt6-Fluent-Widgets"
 ]
 [project.optional-dependencies]
 dev = [
