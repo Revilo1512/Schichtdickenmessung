@@ -12,7 +12,8 @@ dependencies = [
   "PyQt6",
   "refractiveindex2",
   "pyueye",
-  "PyQt6-Fluent-Widgets"
+  "PyQt6-Fluent-Widgets",
+  "pytubefix"
 ]
 [project.optional-dependencies]
 dev = [
