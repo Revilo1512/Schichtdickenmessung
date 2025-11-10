@@ -122,36 +122,3 @@ class CalculationService:
         
         return alpha
 
-"""
-# --------------------- Initialisieren der Variablen ---------------------
-bildcounter = 0
-grey_values = []
-grey_values_lin = []
-f_wert = 679970			
-
-# Verwendete Wellenlänge sind 635 nm
-# f_wert ist der Absorptionskoeffizient ALPHA in cm⁻¹ von https://refractiveindex.info/
-# Hier verwendet Kupfer von "Johnson and Christy 1972: n,k 0.188-1.937 µm", bei 635 nm Wellenlänge
-
-# --------------------- while-Schleife ---------------------
-while (bildcounter != 2):
-    input("Drücke Enter zum Auslösen")
-    array = ueye.get_data(pcImageMemory, width, height, nBitsPerPixel, pitch, copy=False)
-    frame = np.reshape(array, (height.value, width.value, bytes_per_pixel))
-    cv2.imshow("SimpleLive_Python_uEye_OpenCV", frame)
-
-    mean_pixel_value = calculate_mean_pixel_value(frame, bildcounter)
-    grey_values.append(mean_pixel_value)
-
-    lin_pixel_value = linearize_mean_pixel_value(mean_pixel_value)
-    grey_values_lin.append(lin_pixel_value)
-
-    bildcounter += 1
-
-# --------------------- Berechnung des Ergebnisses ---------------------
-if len(grey_values) >= 2:
-    ergebnis_x = berechne_x(grey_values_lin[0], grey_values_lin[1], f_wert)
-    print("Die Dicke der Probe ist:", ergebnis_x, "nm")
-else:
-    print("Nicht genügend Daten in der Liste für die Berechnung.")
-"""
