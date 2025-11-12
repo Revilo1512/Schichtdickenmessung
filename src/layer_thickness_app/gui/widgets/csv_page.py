@@ -1,7 +1,7 @@
 import os
 from typing import Dict, Any, Optional
 
-from PyQt6.QtCore import Qt, QDate
+from PyQt6.QtCore import Qt, QDate, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, 
     QFileDialog, QFrame, QFormLayout
@@ -19,6 +19,8 @@ class CSVPage(QWidget):
     """
     A page for importing and exporting measurement data with filters.
     """
+    data_changed = pyqtSignal()
+
     def __init__(self,
                  db_service: DatabaseService,
                  import_service: ImportService,
@@ -320,6 +322,9 @@ class CSVPage(QWidget):
             # Refresh filter suggestions and update count
             self._load_filter_suggestions()
             self.on_update_count() # Update count after import
+
+            if success_count > 0:
+                self.data_changed.emit()
             
         except Exception as e:
             print(f"Error during import: {e}")

@@ -1,11 +1,12 @@
 from typing import List, Dict, Any
-from PyQt6.QtCore import Qt, QDate
+from PyQt6.QtCore import Qt, QDate, pyqtSignal
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, 
                              QTableWidgetItem, QAbstractItemView, QHeaderView)
 from qfluentwidgets import (
     BodyLabel, CaptionLabel, ComboBox, 
     DatePicker, PrimaryPushButton, PushButton, 
-    TableWidget, ToolButton, FluentIcon, SubtitleLabel
+    TableWidget, ToolButton, FluentIcon, SubtitleLabel,
+    InfoBar, InfoBarPosition, MessageBox
 )
 
 from layer_thickness_app.services.database_service import DatabaseService
@@ -15,6 +16,8 @@ class HistoryPage(QWidget):
     """
     A page to display, filter, and paginate measurement history.
     """
+    data_changed = pyqtSignal()
+
     def __init__(self, db_service: DatabaseService, parent=None):
         super().__init__(parent)
         self.db_service = db_service
@@ -58,6 +61,8 @@ class HistoryPage(QWidget):
 
         # Filter Buttons
         self.filter_button = PrimaryPushButton("Apply Filters", self)
+        self.delete_button = ToolButton(FluentIcon.DELETE, self)
+        self.delete_button.setToolTip("Delete filtered data")
         self.reset_button = PushButton("Reset", self)
         self.refresh_button = ToolButton(FluentIcon.SYNC, self)
         self.refresh_button.setToolTip("Refresh data")
@@ -112,6 +117,7 @@ class HistoryPage(QWidget):
         filter_layout_2.addWidget(self.filter_button)
         filter_layout_2.addWidget(self.reset_button)
         filter_layout_2.addWidget(self.refresh_button)
+        filter_layout_2.addWidget(self.delete_button)
 
         # Pagination layout
         nav_layout = QHBoxLayout()
@@ -130,6 +136,7 @@ class HistoryPage(QWidget):
     def _connect_signals(self):
         """Connect widget signals to slots."""
         self.filter_button.clicked.connect(self._on_filter_apply)
+        self.delete_button.clicked.connect(self._on_delete_filtered)
         self.reset_button.clicked.connect(self._on_filter_reset)
         self.refresh_button.clicked.connect(self._on_filter_apply)
         self.sort_order_combo.currentIndexChanged.connect(self._on_filter_apply)
@@ -137,12 +144,25 @@ class HistoryPage(QWidget):
         self.next_button.clicked.connect(self._on_next_page)
 
     def _load_name_suggestions(self):
-        """Fetches unique names from DB and populates the ComboBox."""
+        """
+        Fetches unique names from DB and populates the ComboBox.
+        Tries to preserve the currently selected item.
+        """
+        current_name = self.name_filter.currentText()
+        
         names = self.db_service.get_unique_names()
+        
+        self.name_filter.blockSignals(True) # Prevent signals during update
         self.name_filter.clear()
         self.name_filter.addItems(names)
-        self.name_filter.setCurrentIndex(-1)
-        self.name_filter.setText("") # Clear text
+
+        # Try to restore the selection
+        if current_name in names:
+            self.name_filter.setCurrentText(current_name)
+        else:
+            self.name_filter.setCurrentIndex(-1)
+            
+        self.name_filter.blockSignals(False) # Re-enable signals
 
     def _on_filter_apply(self):
         """Resets to page 1 and refreshes data based on filters."""
@@ -189,6 +209,85 @@ class HistoryPage(QWidget):
             # Note: We are not filtering by note on this page, just displaying it.
         }
 
+    def _on_delete_filtered(self):
+        """
+        Shows a confirmation dialog before deleting all measurements
+        that match the current filters.
+        """
+        filters = self._get_current_filters()
+        count = self.db_service.get_measurements_count(**filters)
+        
+        if count == 0:
+            self._show_info_bar("No Data", "No items match the filters to delete.", is_error=True)
+            return
+        
+        title = "Delete Measurements?"
+        content = f"You are about to permanently delete {count} measurement(s) matching the current filters.\n\n" \
+                  "This will also delete their associated image files.\n" \
+                  "Are you sure you want to continue?"
+        
+        # Use qfluentwidgets' MessageBox
+        w = MessageBox(title, content, self)
+        w.yesButton.setText('Delete')
+        w.cancelButton.setText('Cancel')
+        
+        if w.exec():
+            self._perform_deletion(filters)
+    def _perform_deletion(self, filters: Dict[str, Any]):
+        """
+        Performs the actual deletion after confirmation.
+        Fetches all matching IDs and deletes them one by one.
+        """
+        try:
+            # Get *all* records to delete, not just one page
+            measurements_to_delete = self.db_service.get_all_filtered_measurements(**filters)
+            deleted_count = 0
+            
+            if not measurements_to_delete:
+                 self._show_info_bar("No Data", "No items found to delete.", is_error=True)
+                 return
+            # Delete one by one to ensure images are also deleted (as per db_service logic)
+            for record in measurements_to_delete:
+                if self.db_service.delete_measurement(record['id']):
+                    deleted_count += 1
+            
+            self._show_info_bar(
+                "Success",
+                f"Successfully deleted {deleted_count} measurement(s).",
+                is_error=False
+            )
+
+            if deleted_count > 0:
+                self.data_changed.emit()
+            
+            # As requested: reset filters and refresh
+            self._on_filter_reset()       # This will reset filters and trigger _refresh_data
+        except Exception as e:
+            print(f"Error during bulk deletion: {e}")
+            self._show_info_bar(
+                "Deletion Error",
+                f"An unexpected error occurred: {e}",
+                is_error=True
+            )
+    def _show_info_bar(self, title: str, content: str, is_error: bool = False):
+        """Shows a success or error InfoBar message."""
+        if is_error:
+            InfoBar.error(
+                title=title,
+                content=content,
+                duration=5000,
+                parent=self,
+                position=InfoBarPosition.TOP
+            )
+        else:
+            InfoBar.success(
+                title=title,
+                content=content,
+                duration=3000,
+                parent=self,
+                position=InfoBarPosition.TOP
+            )
+
     def _refresh_data(self):
         """
         Fetches the correct data from the DB based on filters and
@@ -216,6 +315,7 @@ class HistoryPage(QWidget):
 
         # 4. Populate the table
         self._populate_table(measurements)
+        self._load_name_suggestions()
 
         # 5. Update pagination controls
         self.page_label.setText(f"Page {self.current_page} of {self.total_pages}")

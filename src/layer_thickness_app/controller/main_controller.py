@@ -1,8 +1,9 @@
 import base64
 import cv2
 import numpy as np
-from typing import Dict, Any
+import uuid
 import os
+from typing import Dict, Any
 from PyQt6.QtGui import QIcon
 
 # import gui
@@ -81,6 +82,21 @@ class MainController:
             
         # Connect config changed signal
         self.measurement_page.config_changed.connect(self._on_measure_config_changed)
+
+        try:
+            # When history page deletes data, tell CSV page to refresh filters
+            self.view.history_interface.data_changed.connect(
+                self.view.csv_interface._load_filter_suggestions
+            )
+            
+            # When CSV page imports data, tell history page to refresh filters
+            self.view.csv_interface.data_changed.connect(
+                self.view.history_interface._load_name_suggestions
+            )
+            
+            print("Controller: Connected data_changed signals between pages.")
+        except AttributeError as e:
+            print(f"Controller Warning: Could not connect data_changed signals. {e}")
     
     def _on_measure_config_changed(self):
         """Re-enables the calculate button when config changes."""
@@ -187,7 +203,8 @@ class MainController:
                                 ref_image: np.ndarray, mat_image: np.ndarray, 
                                 shelf: str, book: str, page: str):
         """
-        Helper method to serialize images and save a measurement to the database.
+        Helper method to save images to disk and save the measurement 
+        (with image filenames) to the database.
         """
         print("Controller: Saving measurement to database...")
         try:
@@ -202,24 +219,34 @@ class MainController:
             # Get note from UI
             note = self.measurement_page.note_field.text()
 
-            # Serialize images to Base64 text
-            _, ref_img_encoded = cv2.imencode('.png', ref_image)
-            ref_img_b64 = base64.b64encode(ref_img_encoded).decode('utf-8')
+            # Generate unique filenames
+            ref_img_name = f"ref_{uuid.uuid4()}.png"
+            mat_img_name = f"mat_{uuid.uuid4()}.png"
             
-            _, mat_img_encoded = cv2.imencode('.png', mat_image)
-            mat_img_b64 = base64.b64encode(mat_img_encoded).decode('utf-8')
+            # Get the image directory path from the database service
+            image_dir = self.db_service.image_dir_path
+            
+            # Create full save paths
+            ref_img_path = os.path.join(image_dir, ref_img_name)
+            mat_img_path = os.path.join(image_dir, mat_img_name)
+
+            # Save images using cv2.imwrite
+            cv2.imwrite(ref_img_path, ref_image)
+            cv2.imwrite(mat_img_path, mat_image)
+            
+            print(f"Controller: Saved images to {ref_img_path} and {mat_img_path}")
 
             # Create data dictionary matching database schema
             db_data = {
                 "Name": name,
                 "Layer": thickness,
-                "Wavelength": wavelength, # Add wavelength
-                "RefImage": ref_img_b64,
-                "MatImage": mat_img_b64,
+                "Wavelength": wavelength,
+                "RefImage": ref_img_name,
+                "MatImage": mat_img_name,
                 "Shelf": shelf,
                 "Book": book,
                 "Page": page,
-                "Note": note if note else None # Add note
+                "Note": note if note else None
             }
             
             # Call database service

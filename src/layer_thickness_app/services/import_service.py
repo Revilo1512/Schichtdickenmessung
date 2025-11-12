@@ -4,8 +4,9 @@ import tempfile
 import os
 import base64
 import shutil
+import uuid
 from typing import Tuple
-
+from pathlib import Path
 from layer_thickness_app.services.database_service import DatabaseService
 
 
@@ -25,22 +26,15 @@ class ImportService:
     def __init__(self, db_service: DatabaseService):
         self.db_service = db_service
 
-    def _read_image_as_base64(self, img_path: str) -> str | None:
-        """Reads an image file and returns it as a base64 string."""
-        if not os.path.exists(img_path):
-            print(f"Image not found at path: {img_path}")
-            return None
-        try:
-            with open(img_path, 'rb') as f:
-                encoded_string = base64.b64encode(f.read()).decode('utf-8')
-            return encoded_string
-        except Exception as e:
-            print(f"Error reading image {img_path}: {e}")
-            return None
+        self.image_dir_path = Path(self.db_service.db_path).parent / "images"
+        self.image_dir_path.mkdir(parents=True, exist_ok=True)
+
+    
 
     def import_from_zip(self, zip_filepath: str) -> Tuple[int, int]:
         """
-        Reads a ZIP archive, extracts it, and imports its data into the database.
+        Reads a ZIP archive, extracts it, copies images to the data/images
+        folder, and imports metadata into the database.
         """
         print(f"Starting import from {zip_filepath}...")
         success_count = 0
@@ -82,8 +76,6 @@ class ImportService:
                             # Handle None for 'Note' column if it's missing in the row
                             data_to_save[col] = row.get(col) 
                             
-                        # --- FIX for 'could not convert string to float: ''' ---
-                        # 'Layer' is NOT NULL, so it must be valid
                         try:
                             data_to_save['Layer'] = float(row['Layer'])
                         except (ValueError, TypeError):
@@ -100,24 +92,44 @@ class ImportService:
                         except (ValueError, TypeError):
                             print(f"Error processing row {i}: Invalid data type for 'Wavelength', setting to NULL. Got '{row.get('Wavelength', 'N/A')}'")
                             data_to_save['Wavelength'] = None
-                        # --- END FIX ---
                         
                         # 'Date', 'Name', 'Shelf', 'Book', 'Page', 'Note' are handled by the loop
 
-                        # --- 4. Convert Image Paths to Base64 ---
-                        ref_img_path = os.path.join(temp_dir, row['RefImage'])
-                        mat_img_path = os.path.join(temp_dir, row['MatImage'])
+                        # --- 4. Copy images and save filenames ---
+                        
+                        # Get paths from CSV (relative to temp_dir)
+                        ref_img_rel_path = row['RefImage']
+                        mat_img_rel_path = row['MatImage']
 
-                        ref_b64 = self._read_image_as_base64(ref_img_path)
-                        mat_b64 = self._read_image_as_base64(mat_img_path)
+                        # Get source paths (in the extracted zip folder)
+                        ref_img_src_path = os.path.join(temp_dir, ref_img_rel_path)
+                        mat_img_src_path = os.path.join(temp_dir, mat_img_rel_path)
 
-                        if ref_b64 is None or mat_b64 is None:
-                            print(f"Error processing row {i}: Could not read image files.")
+                        if not os.path.exists(ref_img_src_path) or not os.path.exists(mat_img_src_path):
+                            print(f"Error processing row {i}: Image file not found in ZIP. Missing {ref_img_src_path} or {mat_img_src_path}")
                             fail_count += 1
                             continue
 
-                        data_to_save['RefImage'] = ref_b64
-                        data_to_save['MatImage'] = mat_b64
+                        # Generate new unique filenames for the database
+                        ref_img_name_db = f"ref_{uuid.uuid4()}.png"
+                        mat_img_name_db = f"mat_{uuid.uuid4()}.png"
+
+                        # Define destination paths (in the data/images folder)
+                        ref_img_dest_path = self.image_dir_path / ref_img_name_db
+                        mat_img_dest_path = self.image_dir_path / mat_img_name_db
+
+                        # Copy the files
+                        try:
+                            shutil.copy(ref_img_src_path, ref_img_dest_path)
+                            shutil.copy(mat_img_src_path, mat_img_dest_path)
+                        except Exception as copy_e:
+                            print(f"Error processing row {i}: Could not copy image files. {copy_e}")
+                            fail_count += 1
+                            continue
+                        
+                        # Store the *new filenames* in the data to be saved
+                        data_to_save['RefImage'] = ref_img_name_db
+                        data_to_save['MatImage'] = mat_img_name_db
                         
                         # --- 5. Save to DB ---
                         new_id = self.db_service.save_measurement(data_to_save)

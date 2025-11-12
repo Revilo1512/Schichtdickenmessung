@@ -5,6 +5,7 @@ import base64
 import tempfile
 import shutil
 import zipfile
+from pathlib import Path
 from typing import Optional
 
 from layer_thickness_app.services.database_service import DatabaseService
@@ -20,15 +21,7 @@ class ExportService:
 
     def __init__(self, db_service: DatabaseService):
         self.db_service = db_service
-
-    def _save_base64_as_image(self, b64_string: str, out_path: str):
-        """Decodes a base64 string and saves it as a binary file."""
-        try:
-            img_data = base64.b64decode(b64_string)
-            with open(out_path, 'wb') as f:
-                f.write(img_data)
-        except Exception as e:
-            print(f"Error decoding/saving image {out_path}: {e}")
+        self.image_dir_path = Path(self.db_service.db_path).parent / "images"
 
     def export_to_zip(
         self, 
@@ -42,8 +35,8 @@ class ExportService:
         note_filter: Optional[str] = None
     ) -> str:
         """
-        Fetches filtered measurements, creates a CSV and image folder,
-        and saves them as a single timestamped ZIP file.
+        Fetches filtered measurements, copies images from the 'data/images'
+        folder, creates a CSV, and saves them as a single timestamped ZIP file.
 
         Returns:
             str: The full path to the generated ZIP file, or an empty string if
@@ -67,32 +60,41 @@ class ExportService:
             os.makedirs(img_dir, exist_ok=True)
             csv_data = [] # We'll build a new list of dicts for the CSV
 
-            # --- 1. Process data: save images, create new rows for CSV ---
+            # --- 1. MODIFIED: Copy images, create new rows for CSV ---
             for row in data:
                 row_dict = dict(row) # Make a mutable copy
                 db_id = row_dict['id']
                 
-                # Pop the base64 data
-                ref_b64 = row_dict.pop('RefImage', None)
-                mat_b64 = row_dict.pop('MatImage', None)
+                # Get the source filenames from the DB
+                ref_img_filename = row_dict.get('RefImage')
+                mat_img_filename = row_dict.get('MatImage')
 
-                # Define relative paths
-                ref_img_rel_path = f"img/ref_{db_id}.png"
-                mat_img_rel_path = f"img/mat_{db_id}.png"
+                # Define relative paths for the CSV (inside the zip)
+                ref_img_csv_path = f"img/ref_{db_id}.png"
+                mat_img_csv_path = f"img/mat_{db_id}.png"
                 
-                # Define full paths for saving
-                ref_img_full_path = os.path.join(temp_dir, ref_img_rel_path)
-                mat_img_full_path = os.path.join(temp_dir, mat_img_rel_path)
+                # Define full destination paths (in the temp zip folder)
+                ref_img_dest_path = os.path.join(img_dir, f"ref_{db_id}.png")
+                mat_img_dest_path = os.path.join(img_dir, f"mat_{db_id}.png")
 
-                # Save images
-                if ref_b64:
-                    self._save_base64_as_image(ref_b64, ref_img_full_path)
-                if mat_b64:
-                    self._save_base64_as_image(mat_b64, mat_img_full_path)
+                # Copy images from data/images to the temp folder
+                if ref_img_filename:
+                    ref_img_src_path = self.image_dir_path / ref_img_filename
+                    if ref_img_src_path.exists():
+                        shutil.copy(ref_img_src_path, ref_img_dest_path)
+                    else:
+                        print(f"Warning: Source image not found: {ref_img_src_path}")
                 
-                # Update row dict with paths
-                row_dict['RefImage'] = ref_img_rel_path
-                row_dict['MatImage'] = mat_img_rel_path
+                if mat_img_filename:
+                    mat_img_src_path = self.image_dir_path / mat_img_filename
+                    if mat_img_src_path.exists():
+                        shutil.copy(mat_img_src_path, mat_img_dest_path)
+                    else:
+                        print(f"Warning: Source image not found: {mat_img_src_path}")
+
+                # Update row dict with paths *relative to the zip*
+                row_dict['RefImage'] = ref_img_csv_path
+                row_dict['MatImage'] = mat_img_csv_path
                 
                 csv_data.append(row_dict)
 

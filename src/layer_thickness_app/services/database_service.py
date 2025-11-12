@@ -1,6 +1,7 @@
 import sqlite3
+import os
 from typing import Dict, Any, List, Optional, Tuple
-from pathlib import Path  # <-- Import Path from pathlib
+from pathlib import Path
 
 class DatabaseService:
     """
@@ -10,26 +11,24 @@ class DatabaseService:
     def __init__(self, db_path: str):
         """
         Initializes the database connection and creates the table if it doesn't exist.
-        Ensures the directory for the db_path exists.
+        Ensures the directory for the db_path and the images subdir exists.
 
         Args:
             db_path (str): The file path for the SQLite database.
         """
         try:
             self.db_path = db_path
-            
-            # --- ADDED: Ensure the parent directory exists ---
-            # sqlite3.connect() will create the file, but not the folder.
             db_parent_dir = Path(self.db_path).parent
             db_parent_dir.mkdir(parents=True, exist_ok=True)
-            # --- END ADDED ---
+
+            self.image_dir_path = db_parent_dir / "images"
+            self.image_dir_path.mkdir(parents=True, exist_ok=True)
 
             # Enable multi-threaded access
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
             self.cursor = self.conn.cursor()
             self._create_table()
-        # Updated to catch OS-level errors (e.g., permissions) as well
         except (sqlite3.Error, OSError) as e: 
             print(f"Database connection/setup error at {db_path}: {e}")
             raise
@@ -37,6 +36,7 @@ class DatabaseService:
     def _create_table(self):
         """
         Creates the 'measurements' table if it is not already present.
+        RefImage and MatImage will store filenames (TEXT).
         """
         try:
             self.cursor.execute("""
@@ -127,8 +127,8 @@ class DatabaseService:
         params = {}
 
         if name_filter:
-            where_clauses.append("Name LIKE :name")
-            params["name"] = f"%{name_filter}%"
+            where_clauses.append("Name = :name")
+            params["name"] = name_filter
         if start_date:
             where_clauses.append("DATE(Date) >= :start_date")
             params["start_date"] = start_date
@@ -299,7 +299,8 @@ class DatabaseService:
 
     def delete_measurement(self, measurement_id: int) -> bool:
         """
-        Deletes a measurement record from the database by its ID.
+        Deletes a measurement record from the database by its ID
+        and also deletes its associated image files.
         """
         try:
             self.cursor.execute("DELETE FROM measurements WHERE id = ?", (measurement_id,))
@@ -308,6 +309,47 @@ class DatabaseService:
         except sqlite3.Error as e:
             print(f"Error deleting measurement with id {measurement_id}: {e}")
             return False
+        
+    def delete_measurement(self, measurement_id: int) -> bool:
+        """
+        Deletes a measurement record from the database by its ID
+        and also deletes its associated image files.
+        """
+        try:
+            self.cursor.execute("SELECT RefImage, MatImage FROM measurements WHERE id = ?", (measurement_id,))
+            row = self.cursor.fetchone()
+            
+            # Delete the database row
+            self.cursor.execute("DELETE FROM measurements WHERE id = ?", (measurement_id,))
+            self.conn.commit()
+            
+            row_was_deleted = self.cursor.rowcount > 0
+            
+            # If deletion was successful, delete the image files
+            if row and row_was_deleted:
+                self._delete_image_file(row['RefImage'])
+                self._delete_image_file(row['MatImage'])
+                
+            return row_was_deleted
+        except sqlite3.Error as e:
+            print(f"Error deleting measurement with id {measurement_id}: {e}")
+            return False
+
+    def _delete_image_file(self, filename: Optional[str]):
+        """
+        Safely deletes a single image file from the image directory.
+        """
+        if not filename:
+            return
+        try:
+            file_path = self.image_dir_path / filename
+            if file_path.exists():
+                os.remove(file_path)
+                print(f"Deleted image file: {file_path}")
+            else:
+                print(f"Warning: Tried to delete file, but it was not found: {file_path}")
+        except (OSError, Exception) as e:
+            print(f"Error deleting image file {filename}: {e}")
 
     def close(self):
         """Closes the database connection."""
