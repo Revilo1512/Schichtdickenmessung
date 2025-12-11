@@ -10,7 +10,6 @@ from qfluentwidgets import setTheme, isDarkTheme, Theme
 
 
 # --- THEME STYLESHEETS ---
-# Paths to the new QSS files
 QSS_RESOURCES_PATH = "src/layer_thickness_app/gui/resources"
 LIGHT_THEME_QSS = os.path.join(QSS_RESOURCES_PATH, "light_theme.qss")
 DARK_THEME_QSS = os.path.join(QSS_RESOURCES_PATH, "dark_theme.qss")

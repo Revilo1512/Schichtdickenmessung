@@ -21,9 +21,6 @@ class MockRefractiveIndexMaterial:
         if self.raise_exception:
             raise Exception("Mock Material Error")
 
-        # Logic could be added here, e.g.,
-        # if self.path == "fail/path": raise...
-
         return self._k_value
 
     def set_k_value(self, k: float):
@@ -250,7 +247,7 @@ def test_calculate_thickness_alpha_error(
         ref_image=test_images["ref"],
         mat_image=test_images["mat"],
         shelf="test", book="test", page="test",
-        wavelength_um=0.0  # This is the invalid value
+        wavelength_um=0.0  # invalid value
     )
 
     # 3. Verify error

@@ -127,7 +127,7 @@ class ImportService:
                             fail_count += 1
                             continue
                         
-                        # Store the *new filenames* in the data to be saved
+                        # Store the filenames in the data to be saved
                         data_to_save['RefImage'] = ref_img_name_db
                         data_to_save['MatImage'] = mat_img_name_db
                         

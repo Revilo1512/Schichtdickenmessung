@@ -63,7 +63,7 @@ class MainController:
     def show_window(self):
         """Makes the main window visible."""
         self.view.show()
-        # Window size is now handled by MainWindow itself
+        # Window size is handled by MainWindow itself
 
     def _connect_signals(self):
         """Connects all the UI signals to the controller's methods."""

@@ -31,7 +31,7 @@ class CameraService:
         try:
             # 1. Create an empty UEYE_CAMERA_LIST instance.
             #    The pyueye wrapper pre-allocates space in this structure.
-            cam_list = ueye.UEYE_CAMERA_LIST() # <--- FIX: Correct class name, no arguments
+            cam_list = ueye.UEYE_CAMERA_LIST() 
 
             # 2. Call is_GetCameraList to populate the instance.
             if ueye.is_GetCameraList(cam_list) != ueye.IS_SUCCESS:
@@ -39,7 +39,7 @@ class CameraService:
                 return []
             
             # 3. Get the number of cameras from the list's dwCount field.
-            n_cameras = int(cam_list.dwCount) # <--- FIX: Get count from the list
+            n_cameras = int(cam_list.dwCount)
             
             if n_cameras == 0:
                 print("CameraService: INFO - No uEye cameras found.")

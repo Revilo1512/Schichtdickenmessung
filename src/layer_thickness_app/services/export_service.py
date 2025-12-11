@@ -58,9 +58,9 @@ class ExportService:
         
         try:
             os.makedirs(img_dir, exist_ok=True)
-            csv_data = [] # We'll build a new list of dicts for the CSV
+            csv_data = [] # new list of dicts for the CSV
 
-            # --- 1. MODIFIED: Copy images, create new rows for CSV ---
+            # --- 1. Copy images, create new rows for CSV ---
             for row in data:
                 row_dict = dict(row) # Make a mutable copy
                 db_id = row_dict['id']

@@ -206,7 +206,7 @@ class HistoryPage(QWidget):
             "name_filter": name,
             "start_date": start_date_str,
             "end_date": end_date_str
-            # Note: We are not filtering by note on this page, just displaying it.
+            # Note: not filtering by note on this page, just displaying it.
         }
 
     def _on_delete_filtered(self):
