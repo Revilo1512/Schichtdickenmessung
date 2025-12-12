@@ -185,7 +185,7 @@ class HelpPage(QWidget):
     # -----------------------------------------------------------
     # SET VIDEO URL AND FILE DETAILS HERE 
     # -----------------------------------------------------------
-    VIDEO_URL = "https://www.youtube.com/watch?v=3AxBl2XDXuw"
+    VIDEO_URL = "https://www.youtube.com/watch?v=w8a6-tIsIgw"
     VIDEO_FILENAME = "introduction.mp4"
     # -----------------------------------------------------------
 
