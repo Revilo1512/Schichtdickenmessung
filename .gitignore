@@ -10,7 +10,8 @@ wheels/
 .venv
 
 # Custom
-data/*
+data/measurements.db
+data/images/*
 legacy/*
 src/experimentation
 src/layer_thickness_app/config/config.json

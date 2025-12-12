@@ -1,6 +1,6 @@
 # Layer Thickness Measurement Tool (Schichtdickenmessung)
 
-![Project Banner](data/images/banner.png) ## 📖 About The Project
+![Project Banner](data/banner.png) ## 📖 About The Project
 
 This project, developed as part of **Wahlfachprojekt 2 (WFP2)** at **FH Campus Wien**, provides a standalone graphical application for measuring layer thickness using transmission measurement principles.
 
@@ -46,7 +46,7 @@ Before running the application, ensure you have the following hardware and softw
 
 2.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/Revilo1512/Schichtdickenmessung.git](https://github.com/Revilo1512/Schichtdickenmessung.git)
+    git clone https://github.com/Revilo1512/Schichtdickenmessung.git
     cd Schichtdickenmessung
     ```
 
@@ -76,7 +76,7 @@ Before running the application, ensure you have the following hardware and softw
 
 1.  **Clone the repository:**
     ```bash
-    git clone [https://github.com/Revilo1512/Schichtdickenmessung.git](https://github.com/Revilo1512/Schichtdickenmessung.git)
+    git clone https://github.com/Revilo1512/Schichtdickenmessung.git
     cd Schichtdickenmessung
     ```
 
@@ -115,15 +115,4 @@ The project is managed with `uv` and follows this structure:
 
 * `src/`: Contains the main application logic (`services`, `controllers`, `gui`).
 * `data/`: Stores the SQLite database (`measurements.db`) and captured images.
-* `legacy/`: Contains migration scripts and older code iterations.
 * `tests/`: Unit tests for calculation and database services.
-
-## 👥 Credits
-
-* **Developer:** Oliver Klager
-* **Supervisor:** FH-Prof. Dipl.-Ing. Heimo Hirner
-* **Cooperation:** FH-Prof. Christoph Mehofer, BSc
-* **Institution:** FH Campus Wien - Computer Science and Digital Communications
-
----
-*Created as part of the CSDCVZ26 curriculum.*
