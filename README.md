@@ -1,6 +1,8 @@
 # Layer Thickness Measurement Tool (Schichtdickenmessung)
 
-![Project Banner](data/banner.png) ## 📖 About The Project
+![Project Banner](data/banner.png) 
+
+## 📖 About The Project
 
 This project, developed as part of **Wahlfachprojekt 2 (WFP2)** at **FH Campus Wien**, provides a standalone graphical application for measuring layer thickness using transmission measurement principles.
 
