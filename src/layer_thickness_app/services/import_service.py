@@ -13,7 +13,7 @@ from layer_thickness_app.services.database_service import DatabaseService
 class ImportService:
     """
     Imports measurement data from a ZIP archive into the DatabaseService.
-    
+
     The ZIP archive is expected to contain:
     - A 'measurements.csv' file.
     - An 'img/' folder containing the images referenced in the CSV.
@@ -21,15 +21,24 @@ class ImportService:
 
     # Define the columns required by the save_measurement method
     # RefImage and MatImage will now be paths in the CSV, but converted to base64
-    REQUIRED_COLUMNS = {'Date', 'Name', 'Layer', 'Wavelength', 'RefImage', 'MatImage', 'Shelf', 'Book', 'Page', 'Note'}
+    REQUIRED_COLUMNS = {
+        "Date",
+        "Name",
+        "Layer",
+        "Wavelength",
+        "RefImage",
+        "MatImage",
+        "Shelf",
+        "Book",
+        "Page",
+        "Note",
+    }
 
     def __init__(self, db_service: DatabaseService):
         self.db_service = db_service
 
         self.image_dir_path = Path(self.db_service.db_path).parent / "images"
         self.image_dir_path.mkdir(parents=True, exist_ok=True)
-
-    
 
     def import_from_zip(self, zip_filepath: str) -> Tuple[int, int]:
         """
@@ -43,19 +52,19 @@ class ImportService:
 
         try:
             # --- 1. Extract ZIP to temp directory ---
-            with zipfile.ZipFile(zip_filepath, 'r') as zip_ref:
+            with zipfile.ZipFile(zip_filepath, "r") as zip_ref:
                 zip_ref.extractall(temp_dir)
-            
-            csv_path = os.path.join(temp_dir, 'measurements.csv')
+
+            csv_path = os.path.join(temp_dir, "measurements.csv")
             if not os.path.exists(csv_path):
                 print(f"Error: 'measurements.csv' not found in the ZIP file.")
                 return (0, 0)
 
             # --- 2. Process the CSV file ---
             # Increase field size limit for safety, though paths are small
-            csv.field_size_limit(10485760) 
+            csv.field_size_limit(10485760)
 
-            with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+            with open(csv_path, "r", newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
 
                 if not reader.fieldnames:
@@ -74,39 +83,50 @@ class ImportService:
                         data_to_save = {}
                         for col in self.REQUIRED_COLUMNS:
                             # Handle None for 'Note' column if it's missing in the row
-                            data_to_save[col] = row.get(col) 
-                            
+                            data_to_save[col] = row.get(col)
+
                         try:
-                            data_to_save['Layer'] = float(row['Layer'])
+                            data_to_save["Layer"] = float(row["Layer"])
                         except (ValueError, TypeError):
-                            print(f"Error processing row {i}: Invalid or missing data for 'Layer'. Expected float, got '{row.get('Layer', 'N/A')}'")
+                            print(
+                                f"Error processing row {i}: Invalid or missing data for 'Layer'. Expected float, got '{row.get('Layer', 'N/A')}'"
+                            )
                             fail_count += 1
-                            continue # Skip to next row
+                            continue  # Skip to next row
 
                         # 'Wavelength' is nullable, so it can be None
                         try:
-                            if row.get('Wavelength') is not None and row['Wavelength'] != '':
-                                data_to_save['Wavelength'] = float(row['Wavelength'])
+                            if (
+                                row.get("Wavelength") is not None
+                                and row["Wavelength"] != ""
+                            ):
+                                data_to_save["Wavelength"] = float(row["Wavelength"])
                             else:
-                                data_to_save['Wavelength'] = None
+                                data_to_save["Wavelength"] = None
                         except (ValueError, TypeError):
-                            print(f"Error processing row {i}: Invalid data type for 'Wavelength', setting to NULL. Got '{row.get('Wavelength', 'N/A')}'")
-                            data_to_save['Wavelength'] = None
-                        
+                            print(
+                                f"Error processing row {i}: Invalid data type for 'Wavelength', setting to NULL. Got '{row.get('Wavelength', 'N/A')}'"
+                            )
+                            data_to_save["Wavelength"] = None
+
                         # 'Date', 'Name', 'Shelf', 'Book', 'Page', 'Note' are handled by the loop
 
                         # --- 4. Copy images and save filenames ---
-                        
+
                         # Get paths from CSV (relative to temp_dir)
-                        ref_img_rel_path = row['RefImage']
-                        mat_img_rel_path = row['MatImage']
+                        ref_img_rel_path = row["RefImage"]
+                        mat_img_rel_path = row["MatImage"]
 
                         # Get source paths (in the extracted zip folder)
                         ref_img_src_path = os.path.join(temp_dir, ref_img_rel_path)
                         mat_img_src_path = os.path.join(temp_dir, mat_img_rel_path)
 
-                        if not os.path.exists(ref_img_src_path) or not os.path.exists(mat_img_src_path):
-                            print(f"Error processing row {i}: Image file not found in ZIP. Missing {ref_img_src_path} or {mat_img_src_path}")
+                        if not os.path.exists(ref_img_src_path) or not os.path.exists(
+                            mat_img_src_path
+                        ):
+                            print(
+                                f"Error processing row {i}: Image file not found in ZIP. Missing {ref_img_src_path} or {mat_img_src_path}"
+                            )
                             fail_count += 1
                             continue
 
@@ -123,14 +143,16 @@ class ImportService:
                             shutil.copy(ref_img_src_path, ref_img_dest_path)
                             shutil.copy(mat_img_src_path, mat_img_dest_path)
                         except Exception as copy_e:
-                            print(f"Error processing row {i}: Could not copy image files. {copy_e}")
+                            print(
+                                f"Error processing row {i}: Could not copy image files. {copy_e}"
+                            )
                             fail_count += 1
                             continue
-                        
+
                         # Store the filenames in the data to be saved
-                        data_to_save['RefImage'] = ref_img_name_db
-                        data_to_save['MatImage'] = mat_img_name_db
-                        
+                        data_to_save["RefImage"] = ref_img_name_db
+                        data_to_save["MatImage"] = mat_img_name_db
+
                         # --- 5. Save to DB ---
                         new_id = self.db_service.save_measurement(data_to_save)
                         if new_id > -1:
@@ -160,5 +182,7 @@ class ImportService:
             except Exception as e:
                 print(f"Error cleaning up temp directory {temp_dir}: {e}")
 
-        print(f"Import complete: {success_count} rows succeeded, {fail_count} rows failed.")
+        print(
+            f"Import complete: {success_count} rows succeeded, {fail_count} rows failed."
+        )
         return (success_count, fail_count)

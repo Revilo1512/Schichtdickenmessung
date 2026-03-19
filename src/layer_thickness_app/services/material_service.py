@@ -1,7 +1,10 @@
+import logging
 import yaml
 import pathlib
 import refractiveindex2 as ri
-from typing import Dict, Any
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 class MaterialService:
     """
@@ -14,35 +17,26 @@ class MaterialService:
         """
         try:
             self.material_data = self._load_and_parse_catalog()
+            logger.info("Material catalog loaded successfully.")
         except FileNotFoundError as e:
-            # Propagate the error to be handled by the application controller
-            raise FileNotFoundError(f"Failed to initialize MaterialService: {e}")
+            logger.error("Failed to initialize MaterialService: %s", e)
+            raise
 
-    def get_material_data(self) -> Dict[str, Any]:
-        """
-        Returns the parsed material data structure.
-
-        Returns:
-            A dictionary containing the structured catalog data.
-        """
+    def get_material_data(self) -> dict[str, Any]:
+        """Returns the parsed material data structure."""
         return self.material_data
 
     def _find_catalog_path(self) -> pathlib.Path:
         """
         Locates the path to the 'catalog-nk.yml' file within the library.
-        
-        Raises:
-            FileNotFoundError: If any part of the expected directory structure is not found.
-
-        Returns:
-            The resolved Path object for the catalog file.
+        Raises FileNotFoundError if not found.
         """
         library_path = pathlib.Path(ri.__file__).resolve().parent
         top_level_database_path = library_path / "database"
+        
         if not top_level_database_path.is_dir():
             raise FileNotFoundError("The top-level 'database' directory was not found in the library path.")
         
-        # The database folder has a unique hash name, so we find the first subdirectory
         hash_folder = next((p for p in top_level_database_path.iterdir() if p.is_dir()), None)
         if not hash_folder:
             raise FileNotFoundError("Could not find the hash-named database subfolder.")
@@ -53,11 +47,8 @@ class MaterialService:
             
         return catalog_file_path
 
-    def _parse_catalog_yml(self, file_path: str) -> Dict[str, Any]:
-        """
-        Correctly parses the nested catalog-nk.yml file, including DIVIDER entries.
-        Dividers are added with special keys like '__DIVIDER_1', '__DIVIDER_2', etc.
-        """
+    def _parse_catalog_yml(self, file_path: str) -> dict[str, Any]:
+        """Parses the nested catalog-nk.yml file, including DIVIDER entries."""
         data_structure = {}
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -95,12 +86,12 @@ class MaterialService:
                                     page_name = page_item.get('name', page_key)
                                     current_book_entry['pages'][page_key] = {'name': page_name}
         except yaml.YAMLError as e:
-            print(f"Error parsing YAML file: {e}")
+            logger.error("Error parsing YAML file: %s", e)
             return {}
+            
         return data_structure
 
-    def _load_and_parse_catalog(self) -> Dict[str, Any]:
+    def _load_and_parse_catalog(self) -> dict[str, Any]:
         """Finds, loads, and parses the catalog file."""
         catalog_path = self._find_catalog_path()
         return self._parse_catalog_yml(str(catalog_path))
-

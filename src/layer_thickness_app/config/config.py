@@ -1,8 +1,10 @@
 import json
-import os
-from pathlib import Path  # <-- Import Path
+import logging
+from pathlib import Path
 from PyQt6.QtCore import QObject, pyqtSignal
 from qfluentwidgets import Theme
+
+logger = logging.getLogger(__name__)
 
 class AppConfig(QObject):
     """
@@ -10,26 +12,24 @@ class AppConfig(QObject):
     Uses signals to notify the application of changes.
     """
     
-    # Define signals for when settings change
     theme_changed = pyqtSignal(Theme)
     language_changed = pyqtSignal(str)
     window_size_changed = pyqtSignal(str)
 
-    # Define default values
     DEFAULT_CONFIG = {
         "theme": "Auto",
         "language": "English",
         "window_size": "1100x800"
     }
 
-    def __init__(self, config_path: str = "config.json"):
+    def __init__(self):
         super().__init__()
-        self.config_path = config_path
+        # Absoluter Pfad: Speichert die config.json immer im selben Ordner wie diese config.py
+        self.config_path = Path(__file__).resolve().parent / "config.json"
         self._config_data = {}
         self.load()
 
     def _get_theme_enum(self, theme_str: str) -> Theme:
-        """Converts a theme string to a Theme enum."""
         if theme_str == "Dark":
             return Theme.DARK
         elif theme_str == "Light":
@@ -37,38 +37,35 @@ class AppConfig(QObject):
         return Theme.AUTO
 
     def load(self):
-        """Loads the config file or creates it with defaults if it doesn't exist."""
         try:
-            config_parent_dir = Path(self.config_path).parent
-            config_parent_dir.mkdir(parents=True, exist_ok=True)
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            print(f"Error creating config directory {config_parent_dir}: {e}")
+            logger.error("Error creating config directory %s: %s", self.config_path.parent, e)
             
-        if os.path.exists(self.config_path):
+        if self.config_path.exists():
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
                     self._config_data = json.load(f)
+                
+                # Fehlende Schlüssel mit Standardwerten auffüllen
                 for key, value in self.DEFAULT_CONFIG.items():
                     self._config_data.setdefault(key, value)
             except json.JSONDecodeError:
-                print(f"Error reading config file {self.config_path}. Loading defaults.")
+                logger.error("Error reading config file %s. Loading defaults.", self.config_path)
                 self._config_data = self.DEFAULT_CONFIG.copy()
         else:
-            print("No config file found. Creating with defaults.")
+            logger.info("No config file found. Creating with defaults at %s", self.config_path)
             self._config_data = self.DEFAULT_CONFIG.copy()
         
-        self.save() # Save to create file or add missing keys
+        self.save()
 
     def save(self):
-        """Saves the current configuration to the JSON file."""
         try:
-            config_parent_dir = Path(self.config_path).parent
-            config_parent_dir.mkdir(parents=True, exist_ok=True)
-            
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(self._config_data, f, indent=4)
-        except IOError as e:
-            print(f"Error saving config file: {e}")
+        except OSError as e:
+            logger.error("Error saving config file: %s", e)
 
     # --- Theme ---
     @property
@@ -102,11 +99,10 @@ class AppConfig(QObject):
         return self._config_data.get("window_size", "1100x800")
 
     def set_window_size(self, size_str: str):
-        """size_str should be 'WidthxHeight' or 'Fullscreen'"""
         if "x" in size_str or size_str == "Fullscreen":
             self._config_data["window_size"] = size_str
             self.save()
             self.window_size_changed.emit(size_str)
 
-# Create a single, global instance for the application to use
-cfg = AppConfig("src/layer_thickness_app/config/config.json")
+# Globales Konfigurationsobjekt erstellen
+cfg = AppConfig()

@@ -1,321 +1,177 @@
-import os
-import sys
-from PyQt6.QtCore import (
-    QUrl, Qt, QObject, QThread, pyqtSignal, pyqtSlot, QStandardPaths
-)
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QSlider, QStyle, 
-    QSizePolicy, QProgressBar, QApplication, QStackedWidget
-)
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PyQt6.QtMultimediaWidgets import QVideoWidget
-from qfluentwidgets import TitleLabel, BodyLabel, ToolButton, CaptionLabel
-from pytubefix import YouTube
+import logging
+from pathlib import Path
 
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton, 
+                             QHBoxLayout, QFrame, QSlider, QStyle)
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QFont
 
-class VideoDownloader(QObject):
-    """
-    Runs on a separate thread to download a YouTube video without
-    blocking the main UI.
-    """
-    # Signal: (current_percentage)
-    progress = pyqtSignal(int)
-    # Signal: (file_path_to_video)
-    finished = pyqtSignal(str)
-    # Signal: (error_message)
-    error = pyqtSignal(str)
+# Check if PyQt6 Multimedia is installed
+try:
+    from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+    from PyQt6.QtMultimediaWidgets import QVideoWidget
+    MULTIMEDIA_AVAILABLE = True
+except ImportError:
+    MULTIMEDIA_AVAILABLE = False
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._total_size = 0
+logger = logging.getLogger(__name__)
 
-    def _progress_callback(self, stream, chunk, bytes_remaining):
-        """Pytube's progress callback."""
-        if self._total_size == 0:
-            self._total_size = stream.filesize
-        
-        bytes_downloaded = self._total_size - bytes_remaining
-        percentage = (bytes_downloaded / self._total_size) * 100
-        self.progress.emit(int(percentage))
+# Local path to the video (relative to this file)
+BASE_DIR = Path(__file__).resolve().parent.parent
+VIDEO_PATH = BASE_DIR / "resources" / "tutorial.mp4"
 
-    @pyqtSlot(str, str)
-    def download(self, url: str, save_path: str):
-        """
-        Downloads the video from 'url' and saves it to 'save_path'.
-        """
-        try:
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            
-            # Setup YouTube object with progress callback
-            yt = YouTube(url, on_progress_callback=self._progress_callback)
-            
-            # Get the best progressive stream (video + audio)
-            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
-            
-            if not stream:
-                self.error.emit("No suitable MP4 stream found.")
-                return
-
-            self._total_size = stream.filesize
-            
-            stream.download(
-                output_path=os.path.dirname(save_path),
-                filename=os.path.basename(save_path)
-            )
-            
-            # Signal completion
-            self.finished.emit(save_path)
-
-        except Exception as e:
-            self.error.emit(f"Download failed: {str(e)}")
-
-
-class SeekSlider(QSlider):
-    """ A custom QSlider that allows seeking by clicking anywhere on the timeline. """
-    def __init__(self, orientation, parent=None):
-        super().__init__(orientation, parent)
-
+class ClickableSlider(QSlider):
+    """A custom slider that jumps exactly to the clicked position."""
     def mousePressEvent(self, event):
-        """ Jump to the position of the mouse click. """
         super().mousePressEvent(event)
         if event.button() == Qt.MouseButton.LeftButton:
-            value = QStyle.sliderValueFromPosition(
-                self.minimum(),
-                self.maximum(),
-                event.pos().x(),
-                self.width(),
-            )
-            self.setValue(value)
-
-
-class VideoPlayer(QWidget):
-    """
-    A custom video player widget with integrated, theme-aware controls like a timeline,
-    volume, and a play/pause button.
-    """
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("video_player")
-
-        # --- Media Player Setup ---
-        self.player = QMediaPlayer()
-        self.video_widget = QVideoWidget()
-        self.player.setVideoOutput(self.video_widget)
-        self._audio_output = QAudioOutput()
-        self.player.setAudioOutput(self._audio_output)
-        
-        self.video_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
-        # --- Controls ---
-        self.play_pause_button = ToolButton()
-        self.play_pause_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-        
-        self.timeline_slider = SeekSlider(Qt.Orientation.Horizontal)
-        self.timeline_slider.setRange(0, 0)
-
-        self.time_label = CaptionLabel("00:00 / 00:00")
-        
-        # --- Layout ---
-        controls_layout = QHBoxLayout()
-        controls_layout.addWidget(self.play_pause_button)
-        controls_layout.addWidget(self.timeline_slider)
-        controls_layout.addWidget(self.time_label)
-
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(self.video_widget)
-        main_layout.addLayout(controls_layout)
-
-        # --- Connect Signals ---
-        self.play_pause_button.clicked.connect(self.toggle_playback)
-        self.player.positionChanged.connect(self.update_position)
-        self.player.durationChanged.connect(self.update_duration)
-        self.player.mediaStatusChanged.connect(self.update_button_icon)
-        self.timeline_slider.sliderMoved.connect(self.player.setPosition)
-
-    def set_source(self, url: QUrl):
-        """Sets the video source file for the player."""
-        self.player.setSource(url)
-
-    def toggle_playback(self):
-        """Plays or pauses the video depending on its current state."""
-        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.player.pause()
-        else:
-            self.player.play()
-        self.update_button_icon()
-
-    def update_button_icon(self):
-        """Updates the play/pause button icon based on player state."""
-        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.play_pause_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
-        else:
-            self.play_pause_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-
-    def update_position(self, position):
-        """Updates the timeline slider and time label."""
-        self.timeline_slider.setValue(position)
-        self.update_time_label()
-        
-    def update_duration(self, duration):
-        """Updates the timeline slider's range."""
-        self.timeline_slider.setRange(0, duration)
-        self.update_time_label()
-
-    def format_time(self, ms):
-        """Formats milliseconds into a MM:SS string."""
-        s = round(ms / 1000)
-        m, s = divmod(s, 60)
-        return f"{m:02d}:{s:02d}"
-
-    def update_time_label(self):
-        """Updates the time label with current and total duration."""
-        current_time = self.format_time(self.player.position())
-        total_time = self.format_time(self.player.duration())
-        self.time_label.setText(f"{current_time} / {total_time}")
-
+            # Calculate the exact value based on the mouse click coordinates
+            val = self.minimum() + ((self.maximum() - self.minimum()) * event.position().x()) / self.width()
+            self.setValue(int(val))
+            self.sliderMoved.emit(int(val))
 
 class HelpPage(QWidget):
-    """ 
-    Page to display an introductory video.
-    Checks for a local copy, downloads from YouTube if missing,
-    and displays a progress bar during download.
     """
-    
-    # -----------------------------------------------------------
-    # SET VIDEO URL AND FILE DETAILS HERE 
-    # -----------------------------------------------------------
-    VIDEO_URL = "https://www.youtube.com/watch?v=w8a6-tIsIgw"
-    VIDEO_FILENAME = "introduction.mp4"
-    # -----------------------------------------------------------
+    Help page that displays a tutorial video if it exists locally.
+    If the video is missing, a placeholder is displayed instead.
+    Contains a fully functional media player with seek and volume sliders.
+    """
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("helpPage")
+        self._setup_ui()
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("help_page")
-        
-        # --- Video Path Setup ---
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # Fallback to a standard app data location
-        try:
-            gui_dir = os.path.dirname(script_dir)
-            self.video_folder = os.path.join(gui_dir, "resources")
-        except Exception:
-            # A more robust fallback: use the app's standard data location
-            self.video_folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
-            os.makedirs(self.video_folder, exist_ok=True)
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(20)
 
-        self.video_path = os.path.join(self.video_folder, self.VIDEO_FILENAME)
-        
-        # Thread for the downloader
-        self.download_thread = None
-        
-        # --- Widgets ---
-        self.title_label = TitleLabel("Introductory Video")
-        self.description_label = BodyLabel(
-            "This video shows the application itself and the measuring process."
-        )
-        
-        # --- Stacked Widget for Player/Loading ---
-        # This widget will switch between the loading bar and the video player
-        self.view_stack = QStackedWidget(self)
-        
-        # 1. Loading Widget
-        self.loading_widget = QWidget()
-        loading_layout = QVBoxLayout(self.loading_widget)
-        loading_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.loading_label = CaptionLabel("Checking for video file...")
-        self.loading_bar = QProgressBar()
-        self.loading_bar.setRange(0, 100)
-        self.loading_bar.setTextVisible(True)
-        loading_layout.addStretch(1)
-        loading_layout.addWidget(self.loading_label, 0, Qt.AlignmentFlag.AlignCenter)
-        loading_layout.addSpacing(10)
-        loading_layout.addWidget(self.loading_bar)
-        loading_layout.addStretch(1)
-        
-        # 2. Video Player Widget
-        self.video_player = VideoPlayer(self)
+        # --- Title ---
+        title_label = QLabel("Help & Tutorial")
+        title_font = QFont()
+        title_font.setPointSize(24)
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title_label)
 
-        self.view_stack.addWidget(self.loading_widget) # Index 0
-        self.view_stack.addWidget(self.video_player)   # Index 1
+        # --- Description ---
+        desc_label = QLabel("Watch this tutorial to learn how to use the layer thickness measurement tool.")
+        desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc_label.setStyleSheet("font-size: 14px; margin-bottom: 20px;")
+        layout.addWidget(desc_label)
 
-        # --- Layout ---
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(40, 20, 40, 20)
-        main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        main_layout.addWidget(self.title_label)
-        main_layout.addWidget(self.description_label)
-        main_layout.addSpacing(10)
-        main_layout.addWidget(self.view_stack) # Add the stack instead of the player
-        
-        # --- Check for Video and Load ---
-        self.check_and_load_video()
-
-    def check_and_load_video(self):
-        """
-        Checks if the video file exists. If yes, loads it.
-        If not, starts the download process.
-        """
-        if os.path.exists(self.video_path):
-            self.load_video(self.video_path)
+        # --- Video Player OR Placeholder ---
+        if VIDEO_PATH.exists() and MULTIMEDIA_AVAILABLE:
+            logger.info("Tutorial video found. Initializing video player.")
+            self._setup_video_player(layout)
         else:
-            print(f"Video not found at {self.video_path}. Starting download...")
-            self.start_download()
+            if not VIDEO_PATH.exists():
+                logger.warning("Tutorial video not found at: %s", VIDEO_PATH)
+            if not MULTIMEDIA_AVAILABLE:
+                logger.warning("PyQt6.QtMultimedia is not available. Cannot play video.")
+            self._setup_placeholder(layout)
 
-    def load_video(self, file_path):
-        """Loads the video into the player and shows it."""
-        self.video_player.set_source(QUrl.fromLocalFile(file_path))
-        self.view_stack.setCurrentWidget(self.video_player)
-
-    def start_download(self):
-        """
-        Initializes the downloader worker and thread
-        and connects all signals.
-        """
-        # Show the loading widget
-        self.view_stack.setCurrentWidget(self.loading_widget)
-        self.loading_label.setText(f"Downloading video from YouTube...")
-
-        # Setup thread and worker
-        self.download_thread = QThread(self)
-        self.downloader = VideoDownloader()
-        self.downloader.moveToThread(self.download_thread)
-
-        # Connect signals
-        self.downloader.progress.connect(self.on_download_progress)
-        self.downloader.finished.connect(self.on_download_finished)
-        self.downloader.error.connect(self.on_download_error)
+    def _setup_placeholder(self, layout: QVBoxLayout):
+        """Creates a nice placeholder box while the video is missing."""
+        placeholder_frame = QFrame()
+        placeholder_frame.setStyleSheet("""
+            QFrame {
+                background-color: #2E2E2E; 
+                border: 2px dashed #666; 
+                border-radius: 10px;
+            }
+        """)
         
-        # Start the thread and tell the worker to download
-        self.download_thread.started.connect(
-            lambda: self.downloader.download(self.VIDEO_URL, self.video_path)
-        )
+        frame_layout = QVBoxLayout(placeholder_frame)
         
-        # Clean up the thread when the worker is done
-        self.downloader.finished.connect(self.download_thread.quit)
-        self.downloader.finished.connect(self.downloader.deleteLater)
-        self.download_thread.finished.connect(self.download_thread.deleteLater)
+        info_label = QLabel(f"<b>Video Placeholder</b><br><br>"
+                            f"The tutorial video was not found at:<br>"
+                            f"<span style='color: #888;'>{VIDEO_PATH}</span><br><br>")
+        info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info_label.setStyleSheet("color: white; font-size: 14px; border: none;")
+        
+        frame_layout.addWidget(info_label)
+        layout.addWidget(placeholder_frame, 1) # stretch
 
-        # Start the download
-        self.download_thread.start()
+    def _setup_video_player(self, layout: QVBoxLayout):
+        """Initializes the PyQt6 video player with seek slider, volume, and icons."""
+        self.video_widget = QVideoWidget()
+        self.media_player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
+        
+        # Start volume at 50%
+        self.audio_output.setVolume(0.5)
+        self.media_player.setAudioOutput(self.audio_output)
+        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.setSource(QUrl.fromLocalFile(str(VIDEO_PATH)))
+        
+        # --- Clickable Seek Slider ---
+        self.position_slider = ClickableSlider(Qt.Orientation.Horizontal)
+        self.position_slider.setRange(0, 0)
+        self.position_slider.sliderMoved.connect(self._set_position)
+        
+        self.media_player.positionChanged.connect(self._position_changed)
+        self.media_player.durationChanged.connect(self._duration_changed)
 
-    @pyqtSlot(int)
-    def on_download_progress(self, percentage):
-        """Updates the progress bar."""
-        self.loading_bar.setValue(percentage)
+        # --- Controls Layout ---
+        controls_layout = QHBoxLayout()
+        
+        # 1. Playback Buttons
+        self.play_btn = QPushButton()
+        self.pause_btn = QPushButton()
+        self.stop_btn = QPushButton()
+        
+        self.play_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.pause_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+        self.stop_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
+        
+        button_style = "padding: 8px 15px; border-radius: 4px;"
+        for btn in [self.play_btn, self.pause_btn, self.stop_btn]:
+            btn.setStyleSheet(button_style)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        self.play_btn.clicked.connect(self.media_player.play)
+        self.pause_btn.clicked.connect(self.media_player.pause)
+        self.stop_btn.clicked.connect(self.media_player.stop)
 
-    @pyqtSlot(str)
-    def on_download_finished(self, file_path):
-        """Called when download is successful."""
-        print(f"Video downloaded successfully to {file_path}")
-        self.loading_label.setText("Download complete. Loading video...")
-        self.load_video(file_path)
+        # 2. Volume Control
+        volume_icon = QLabel()
+        volume_icon.setPixmap(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaVolume).pixmap(18, 18))
+        
+        self.volume_slider = ClickableSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(50) # Matches the 0.5 audio output set above
+        self.volume_slider.setFixedWidth(120)
+        self.volume_slider.valueChanged.connect(self._set_volume)
+        
+        # Assemble controls horizontally
+        controls_layout.addWidget(self.play_btn)
+        controls_layout.addWidget(self.pause_btn)
+        controls_layout.addWidget(self.stop_btn)
+        controls_layout.addStretch(1) # Pushes the volume controls to the right side
+        controls_layout.addWidget(volume_icon)
+        controls_layout.addWidget(self.volume_slider)
+        
+        layout.addWidget(self.video_widget, 1) # Stretch
+        layout.addWidget(self.position_slider)
+        layout.addLayout(controls_layout)
 
-    @pyqtSlot(str)
-    def on_download_error(self, error_msg):
-        """Called if the download fails."""
-        print(f"Error downloading video: {error_msg}")
-        self.loading_label.setText(f"Error: {error_msg}")
-        self.loading_bar.hide()
+    # --- Slider Logic ---
+    def _position_changed(self, position: int):
+        """Updates the slider when the video plays."""
+        self.position_slider.blockSignals(True) # Prevent infinite feedback loop
+        self.position_slider.setValue(position)
+        self.position_slider.blockSignals(False)
 
+    def _duration_changed(self, duration: int):
+        """Sets the slider range based on the length of the loaded video."""
+        self.position_slider.setRange(0, duration)
+
+    def _set_position(self, position: int):
+        """Seeks the video when the user drags or clicks the position slider."""
+        self.media_player.setPosition(position)
+
+    def _set_volume(self, volume: int):
+        """Adjusts the volume (Qt6 requires a float between 0.0 and 1.0)"""
+        self.audio_output.setVolume(volume / 100.0)

@@ -1,24 +1,43 @@
-from typing import List, Dict, Any
+import logging
+from typing import Any
+
 from PyQt6.QtCore import Qt, QDate, pyqtSignal
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, 
-                             QTableWidgetItem, QAbstractItemView, QHeaderView)
+from PyQt6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QTableWidgetItem,
+    QAbstractItemView,
+    QHeaderView,
+)
 from qfluentwidgets import (
-    BodyLabel, CaptionLabel, ComboBox, 
-    DatePicker, PrimaryPushButton, PushButton, 
-    TableWidget, ToolButton, FluentIcon, SubtitleLabel,
-    InfoBar, InfoBarPosition, MessageBox
+    BodyLabel,
+    CaptionLabel,
+    ComboBox,
+    DatePicker,
+    PrimaryPushButton,
+    PushButton,
+    TableWidget,
+    ToolButton,
+    FluentIcon,
+    SubtitleLabel,
+    InfoBar,
+    InfoBarPosition,
+    MessageBox,
 )
 
 from layer_thickness_app.services.database_service import DatabaseService
 
+logger = logging.getLogger(__name__)
 
 class HistoryPage(QWidget):
     """
     A page to display, filter, and paginate measurement history.
     """
+
     data_changed = pyqtSignal()
 
-    def __init__(self, db_service: DatabaseService, parent=None):
+    def __init__(self, db_service: DatabaseService, parent: QWidget | None = None):
         super().__init__(parent)
         self.db_service = db_service
         self.setObjectName("HistoryPage")
@@ -30,8 +49,28 @@ class HistoryPage(QWidget):
         self.total_pages = 1
 
         # Define table headers (must match DB columns)
-        self.headers = ["id", "Date", "Name", "Layer", "Wavelength", "Shelf", "Book", "Page", "Note"]
-        self.header_labels = ["ID", "Date", "Name", "Layer (nm)", "λ (µm)", "Shelf", "Book", "Page", "Note"]
+        self.headers = [
+            "id",
+            "Date",
+            "Name",
+            "Layer",
+            "Wavelength",
+            "Shelf",
+            "Book",
+            "Page",
+            "Note",
+        ]
+        self.header_labels = [
+            "ID",
+            "Date",
+            "Name",
+            "Layer (nm)",
+            "λ (µm)",
+            "Shelf",
+            "Book",
+            "Page",
+            "Note",
+        ]
 
         # --- UI Initialization ---
         self._init_widgets()
@@ -40,7 +79,7 @@ class HistoryPage(QWidget):
 
         # --- Initial Data Load ---
         self._load_name_suggestions()
-        self._refresh_data() # Load data on startup
+        self._refresh_data()  # Load data on startup
 
     def _init_widgets(self):
         """Initialize all UI widgets."""
@@ -71,14 +110,17 @@ class HistoryPage(QWidget):
         self.table = TableWidget(self)
         self.table.setColumnCount(len(self.header_labels))
         self.table.setHorizontalHeaderLabels(self.header_labels)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers) # Read-only
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)  # Read-only
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().hide()
+        
+        # Header Resizing
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive) # ID
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive) # Date
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive) # Name
-        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch) # Note (stretch)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)  # ID
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)  # Date
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)  # Name
+        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)      # Note (stretch)
+        
         self.table.setColumnWidth(0, 80)
         self.table.setColumnWidth(1, 160)
         self.table.setColumnWidth(2, 120)
@@ -100,7 +142,7 @@ class HistoryPage(QWidget):
         filter_layout_1.addWidget(self.filter_title)
         filter_layout_1.addStretch(1)
         filter_layout_1.addWidget(BodyLabel("Name:", self))
-        filter_layout_1.addWidget(self.name_filter, 1) # Name filter can stretch
+        filter_layout_1.addWidget(self.name_filter, 1)  # Name filter can stretch
         filter_layout_1.addSpacing(10)
         filter_layout_1.addWidget(BodyLabel("From:", self))
         filter_layout_1.addWidget(self.start_date_filter)
@@ -128,9 +170,9 @@ class HistoryPage(QWidget):
         nav_layout.addStretch(1)
 
         # Add to main layout
-        self.main_layout.addLayout(filter_layout_1) # Add the first line of filters
-        self.main_layout.addLayout(filter_layout_2) # Add the second line (sort/buttons)
-        self.main_layout.addWidget(self.table, 1) # Table gets all the stretch
+        self.main_layout.addLayout(filter_layout_1)
+        self.main_layout.addLayout(filter_layout_2)
+        self.main_layout.addWidget(self.table, 1)  # Table gets all the stretch
         self.main_layout.addLayout(nav_layout)
 
     def _connect_signals(self):
@@ -149,10 +191,10 @@ class HistoryPage(QWidget):
         Tries to preserve the currently selected item.
         """
         current_name = self.name_filter.currentText()
-        
+
         names = self.db_service.get_unique_names()
-        
-        self.name_filter.blockSignals(True) # Prevent signals during update
+
+        self.name_filter.blockSignals(True)  # Prevent signals during update
         self.name_filter.clear()
         self.name_filter.addItems(names)
 
@@ -161,8 +203,8 @@ class HistoryPage(QWidget):
             self.name_filter.setCurrentText(current_name)
         else:
             self.name_filter.setCurrentIndex(-1)
-            
-        self.name_filter.blockSignals(False) # Re-enable signals
+
+        self.name_filter.blockSignals(False)  # Re-enable signals
 
     def _on_filter_apply(self):
         """Resets to page 1 and refreshes data based on filters."""
@@ -190,22 +232,26 @@ class HistoryPage(QWidget):
             self.current_page += 1
             self._refresh_data()
 
-    def _get_current_filters(self) -> Dict[str, Any]:
+    def _get_current_filters(self) -> dict[str, Any]:
         """Helper to get all filter values."""
         name = self.name_filter.currentText()
         if not name:
             name = None
-            
+
         start_date_q = self.start_date_filter.date
-        start_date_str = start_date_q.toString("yyyy-MM-dd") if start_date_q.isValid() else None
-        
+        start_date_str = (
+            start_date_q.toString("yyyy-MM-dd") if start_date_q.isValid() else None
+        )
+
         end_date_q = self.end_date_filter.date
-        end_date_str = end_date_q.toString("yyyy-MM-dd") if end_date_q.isValid() else None
-        
+        end_date_str = (
+            end_date_q.toString("yyyy-MM-dd") if end_date_q.isValid() else None
+        )
+
         return {
             "name_filter": name,
             "start_date": start_date_str,
-            "end_date": end_date_str
+            "end_date": end_date_str,
             # Note: not filtering by note on this page, just displaying it.
         }
 
@@ -216,24 +262,29 @@ class HistoryPage(QWidget):
         """
         filters = self._get_current_filters()
         count = self.db_service.get_measurements_count(**filters)
-        
+
         if count == 0:
-            self._show_info_bar("No Data", "No items match the filters to delete.", is_error=True)
+            self._show_info_bar(
+                "No Data", "No items match the filters to delete.", is_error=True
+            )
             return
-        
+
         title = "Delete Measurements?"
-        content = f"You are about to permanently delete {count} measurement(s) matching the current filters.\n\n" \
-                  "This will also delete their associated image files.\n" \
-                  "Are you sure you want to continue?"
-        
+        content = (
+            f"You are about to permanently delete {count} measurement(s) matching the current filters.\n\n"
+            "This will also delete their associated image files.\n"
+            "Are you sure you want to continue?"
+        )
+
         # Use qfluentwidgets' MessageBox
         w = MessageBox(title, content, self)
-        w.yesButton.setText('Delete')
-        w.cancelButton.setText('Cancel')
-        
+        w.yesButton.setText("Delete")
+        w.cancelButton.setText("Cancel")
+
         if w.exec():
             self._perform_deletion(filters)
-    def _perform_deletion(self, filters: Dict[str, Any]):
+
+    def _perform_deletion(self, filters: dict[str, Any]):
         """
         Performs the actual deletion after confirmation.
         Fetches all matching IDs and deletes them one by one.
@@ -242,33 +293,36 @@ class HistoryPage(QWidget):
             # Get *all* records to delete, not just one page
             measurements_to_delete = self.db_service.get_all_filtered_measurements(**filters)
             deleted_count = 0
-            
+
             if not measurements_to_delete:
-                 self._show_info_bar("No Data", "No items found to delete.", is_error=True)
-                 return
+                self._show_info_bar(
+                    "No Data", "No items found to delete.", is_error=True
+                )
+                return
+                
             # Delete one by one to ensure images are also deleted (as per db_service logic)
             for record in measurements_to_delete:
-                if self.db_service.delete_measurement(record['id']):
+                if self.db_service.delete_measurement(record["id"]):
                     deleted_count += 1
-            
+
             self._show_info_bar(
                 "Success",
                 f"Successfully deleted {deleted_count} measurement(s).",
-                is_error=False
+                is_error=False,
             )
 
             if deleted_count > 0:
                 self.data_changed.emit()
-            
+
             # As requested: reset filters and refresh
-            self._on_filter_reset()       # This will reset filters and trigger _refresh_data
+            self._on_filter_reset()  
+            
         except Exception as e:
-            print(f"Error during bulk deletion: {e}")
+            logger.exception("Error during bulk deletion: %s", e)
             self._show_info_bar(
-                "Deletion Error",
-                f"An unexpected error occurred: {e}",
-                is_error=True
+                "Deletion Error", f"An unexpected error occurred: {e}", is_error=True
             )
+
     def _show_info_bar(self, title: str, content: str, is_error: bool = False):
         """Shows a success or error InfoBar message."""
         if is_error:
@@ -277,7 +331,7 @@ class HistoryPage(QWidget):
                 content=content,
                 duration=5000,
                 parent=self,
-                position=InfoBarPosition.TOP
+                position=InfoBarPosition.TOP,
             )
         else:
             InfoBar.success(
@@ -285,7 +339,7 @@ class HistoryPage(QWidget):
                 content=content,
                 duration=3000,
                 parent=self,
-                position=InfoBarPosition.TOP
+                position=InfoBarPosition.TOP,
             )
 
     def _refresh_data(self):
@@ -299,18 +353,20 @@ class HistoryPage(QWidget):
 
         # 2. Update total count and pages
         self.total_items = self.db_service.get_measurements_count(**filters)
-        self.total_pages = max(1, (self.total_items + self.items_per_page - 1) // self.items_per_page)
-        
+        self.total_pages = max(
+            1, (self.total_items + self.items_per_page - 1) // self.items_per_page
+        )
+
         # Adjust current page if it's now out of bounds (e.g., after filtering)
         self.current_page = min(self.current_page, self.total_pages)
 
         # 3. Fetch data for the current page
         measurements = self.db_service.get_measurements(
             **filters,
-            page_num=self.current_page, 
+            page_num=self.current_page,
             per_page=self.items_per_page,
             order_by="Date",
-            order_dir=sort_dir
+            order_dir=sort_dir,
         )
 
         # 4. Populate the table
@@ -321,26 +377,31 @@ class HistoryPage(QWidget):
         self.page_label.setText(f"Page {self.current_page} of {self.total_pages}")
         self.prev_button.setEnabled(self.current_page > 1)
         self.next_button.setEnabled(self.current_page < self.total_pages)
-        
-    def _populate_table(self, measurements: List[Dict[str, Any]]):
-        """Clears and refills the table with new data."""
-        self.table.setRowCount(0) # Clear table
-        self.table.setRowCount(len(measurements))
 
-        for row_idx, record in enumerate(measurements):
-            for col_idx, key in enumerate(self.headers):
-                value = record.get(key, "")
-                
-                # Format floating point numbers nicely
-                if key == 'Layer' and isinstance(value, float):
-                    item = QTableWidgetItem(f"{value:.2f}")
-                elif key == 'Wavelength' and isinstance(value, float):
-                    item = QTableWidgetItem(f"{value:.3f}")
-                else:
-                    item = QTableWidgetItem(str(value))
-                
-                # Center-align items (optionally choose which)
-                #if key in ('id', 'Layer', 'Wavelength'):
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                
-                self.table.setItem(row_idx, col_idx, item)
+    def _populate_table(self, measurements: list[dict[str, Any]]):
+        """Clears and refills the table with new data smoothly."""
+        
+        # 1. UI-Updates für die Tabelle einfrieren (Verhindert Warnungen und Flackern)
+        self.table.setUpdatesEnabled(False)
+        
+        try:
+            self.table.clearContents()
+            self.table.setRowCount(len(measurements))
+
+            for row_idx, record in enumerate(measurements):
+                for col_idx, key in enumerate(self.headers):
+                    value = record.get(key, "")
+
+                    # Format floating point numbers nicely
+                    if key == "Layer" and isinstance(value, float):
+                        item = QTableWidgetItem(f"{value:.2f}")
+                    elif key == "Wavelength" and isinstance(value, float):
+                        item = QTableWidgetItem(f"{value:.3f}")
+                    else:
+                        item = QTableWidgetItem(str(value))
+
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.table.setItem(row_idx, col_idx, item)
+        finally:
+            # 2. UI-Updates wieder aktivieren und die Tabelle 1x komplett neu zeichnen lassen
+            self.table.setUpdatesEnabled(True)

@@ -1,7 +1,10 @@
 import sqlite3
 import os
-from typing import Dict, Any, List, Optional, Tuple
+import logging
+from typing import Any
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 class DatabaseService:
     """
@@ -9,13 +12,6 @@ class DatabaseService:
     """
 
     def __init__(self, db_path: str):
-        """
-        Initializes the database connection and creates the table if it doesn't exist.
-        Ensures the directory for the db_path and the images subdir exists.
-
-        Args:
-            db_path (str): The file path for the SQLite database.
-        """
         try:
             self.db_path = db_path
             db_parent_dir = Path(self.db_path).parent
@@ -24,20 +20,15 @@ class DatabaseService:
             self.image_dir_path = db_parent_dir / "images"
             self.image_dir_path.mkdir(parents=True, exist_ok=True)
 
-            # Enable multi-threaded access
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
             self.cursor = self.conn.cursor()
             self._create_table()
         except (sqlite3.Error, OSError) as e: 
-            print(f"Database connection/setup error at {db_path}: {e}")
+            logger.error("Database connection/setup error at %s: %s", db_path, e)
             raise
 
     def _create_table(self):
-        """
-        Creates the 'measurements' table if it is not already present.
-        RefImage and MatImage will store filenames (TEXT).
-        """
         try:
             self.cursor.execute("""
                 CREATE TABLE IF NOT EXISTS measurements (
@@ -54,35 +45,28 @@ class DatabaseService:
                     Note TEXT
                 )
             """)
-            # Check and add columns if they don't exist (for migration)
+            
             self.cursor.execute("PRAGMA table_info(measurements)")
             columns = [col['name'] for col in self.cursor.fetchall()]
             
             if 'Wavelength' not in columns:
-                print("Adding 'Wavelength' column to database...")
+                logger.info("Adding 'Wavelength' column to database...")
                 self.cursor.execute("ALTER TABLE measurements ADD COLUMN Wavelength REAL")
             
             if 'Note' not in columns:
-                print("Adding 'Note' column to database...")
+                logger.info("Adding 'Note' column to database...")
                 self.cursor.execute("ALTER TABLE measurements ADD COLUMN Note TEXT")
 
             self.conn.commit()
         except sqlite3.Error as e:
-            print(f"Error creating/updating table: {e}")
+            logger.error("Error creating/updating table: %s", e)
 
-    def save_measurement(self, data: Dict[str, Any]) -> int:
-        """
-        Saves a new measurement record to the database.
-        Dynamically builds the query based on the keys in the data.
-        - If 'Date' is in data, it's used.
-        - If 'Date' is NOT in data, the DB's DEFAULT is used.
-        """
+    def save_measurement(self, data: dict[str, Any]) -> int:
         try:
             if not data:
-                print("Error: No data provided to save_measurement.")
+                logger.error("No data provided to save_measurement.")
                 return -1
 
-            # Get column names and parameter placeholders from data keys
             columns = ", ".join(data.keys())
             placeholders = ", ".join(f":{key}" for key in data.keys())
             
@@ -93,35 +77,31 @@ class DatabaseService:
             return self.cursor.lastrowid
         
         except sqlite3.Error as e:
-            print(f"Error saving measurement: {e}")
-            print(f"Query: {query}")
-            print(f"Data: {list(data.keys())}") # Don't log full data (images are huge)
+            logger.error("Error saving measurement: %s", e)
+            logger.debug("Data keys: %s", list(data.keys()))
             return -1
 
-    def get_measurement(self, measurement_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Retrieves a single measurement record by its ID.
-        """
+    def get_measurement(self, measurement_id: int) -> dict[str, Any] | None:
         try:
             self.cursor.execute("SELECT * FROM measurements WHERE id = ?", (measurement_id,))
             row = self.cursor.fetchone()
             return dict(row) if row else None
         except sqlite3.Error as e:
-            print(f"Error fetching measurement with id {measurement_id}: {e}")
+            logger.error("Error fetching measurement with id %s: %s", measurement_id, e)
             return None
 
     def _build_filter_query(
         self,
         base_query: str,
-        name_filter: Optional[str] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        shelf: Optional[str] = None,
-        book: Optional[str] = None,
-        page: Optional[str] = None,
-        note_filter: Optional[str] = None
-    ) -> Tuple[str, Dict[str, Any]]:
-        """Helper to build WHERE clauses for filtering."""
+        name_filter: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        shelf: str | None = None,
+        book: str | None = None,
+        page: str | None = None,
+        note_filter: str | None = None
+    ) -> tuple[str, dict[str, Any]]:
+        
         query = base_query
         where_clauses = []
         params = {}
@@ -155,36 +135,32 @@ class DatabaseService:
         
     def get_measurements(
         self,
-        name_filter: Optional[str] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        shelf: Optional[str] = None,
-        book: Optional[str] = None,
-        page: Optional[str] = None,
-        note_filter: Optional[str] = None,
+        name_filter: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        shelf: str | None = None,
+        book: str | None = None,
+        page: str | None = None,
+        note_filter: str | None = None,
         page_num: int = 1,
         per_page: int = 20,
-        order_by: Optional[str] = "Date",
-        order_dir: Optional[str] = "DESC"
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieves a paginated and filtered list of measurement records.
-        """
+        order_by: str = "Date",
+        order_dir: str = "DESC"
+    ) -> list[dict[str, Any]]:
+        
         query, params = self._build_filter_query(
             "SELECT * FROM measurements",
             name_filter, start_date, end_date, shelf, book, page, note_filter
         )
 
-        # Add ordering (with sanitation)
         valid_columns = ('id', 'Date', 'Name', 'Layer', 'Wavelength', 'Shelf', 'Book', 'Page', 'Note')
         safe_order_by = order_by if order_by in valid_columns else "Date"
         safe_order_dir = order_dir if order_dir in ('ASC', 'DESC') else "DESC"
 
         query += f" ORDER BY {safe_order_by} {safe_order_dir}"
         if safe_order_by != 'id':
-            query += ", id DESC" # Add stable secondary sort
+            query += ", id DESC"
 
-        # Add pagination
         offset = (page_num - 1) * per_page
         query += " LIMIT :limit OFFSET :offset"
         params["limit"] = per_page
@@ -195,60 +171,54 @@ class DatabaseService:
             rows = self.cursor.fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
-            print(f"Error fetching measurements: {e}")
+            logger.error("Error fetching measurements: %s", e)
             return []
 
     def get_all_filtered_measurements(
         self,
-        name_filter: Optional[str] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        shelf: Optional[str] = None,
-        book: Optional[str] = None,
-        page: Optional[str] = None,
-        note_filter: Optional[str] = None,
-        order_by: Optional[str] = "Date",
-        order_dir: Optional[str] = "DESC"
-    ) -> List[Dict[str, Any]]:
-        """
-        Retrieves ALL filtered measurement records (no pagination).
-        Used for CSV export.
-        """
+        name_filter: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        shelf: str | None = None,
+        book: str | None = None,
+        page: str | None = None,
+        note_filter: str | None = None,
+        order_by: str = "Date",
+        order_dir: str = "DESC"
+    ) -> list[dict[str, Any]]:
+        
         query, params = self._build_filter_query(
             "SELECT * FROM measurements",
             name_filter, start_date, end_date, shelf, book, page, note_filter
         )
         
-        # Add ordering (with sanitation)
         valid_columns = ('id', 'Date', 'Name', 'Layer', 'Wavelength', 'Shelf', 'Book', 'Page', 'Note')
         safe_order_by = order_by if order_by in valid_columns else "Date"
         safe_order_dir = order_dir if order_dir in ('ASC', 'DESC') else "DESC"
 
         query += f" ORDER BY {safe_order_by} {safe_order_dir}"
         if safe_order_by != 'id':
-            query += ", id DESC" # Add stable secondary sort
+            query += ", id DESC"
 
         try:
             self.cursor.execute(query, params)
             rows = self.cursor.fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
-            print(f"Error fetching all filtered measurements: {e}")
+            logger.error("Error fetching all filtered measurements: %s", e)
             return []
     
     def get_measurements_count(
         self,
-        name_filter: Optional[str] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        shelf: Optional[str] = None,
-        book: Optional[str] = None,
-        page: Optional[str] = None,
-        note_filter: Optional[str] = None
+        name_filter: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        shelf: str | None = None,
+        book: str | None = None,
+        page: str | None = None,
+        note_filter: str | None = None
     ) -> int:
-        """
-        Gets the total count of measurements matching the filters.
-        """
+        
         query, params = self._build_filter_query(
             "SELECT COUNT(*) FROM measurements",
             name_filter, start_date, end_date, shelf, book, page, note_filter
@@ -256,102 +226,70 @@ class DatabaseService:
 
         try:
             self.cursor.execute(query, params)
-            count = self.cursor.fetchone()[0]
-            return count
+            return self.cursor.fetchone()[0]
         except sqlite3.Error as e:
-            print(f"Error counting measurements: {e}")
+            logger.error("Error counting measurements: %s", e)
             return 0
 
-    def _get_unique_column_values(self, column_name: str) -> List[str]:
-        """Helper to get unique, non-null, ordered values from a column."""
-        # Ensure column_name is safe (basic sanitation)
+    def _get_unique_column_values(self, column_name: str) -> list[str]:
         if not column_name.isalnum():
-             print(f"Invalid column name requested: {column_name}")
+             logger.warning("Invalid column name requested: %s", column_name)
              return []
         try:
-            # Use f-string safely as we've validated the column_name
             self.cursor.execute(f"SELECT DISTINCT {column_name} FROM measurements WHERE {column_name} IS NOT NULL AND {column_name} != '' ORDER BY {column_name}")
             rows = self.cursor.fetchall()
             return [row[column_name] for row in rows]
         except sqlite3.Error as e:
-            print(f"Error fetching unique {column_name} values: {e}")
+            logger.error("Error fetching unique %s values: %s", column_name, e)
             return []
 
-    def get_unique_names(self) -> List[str]:
-        """Retrieves a list of all unique names for filter suggestions."""
+    def get_unique_names(self) -> list[str]:
         return self._get_unique_column_values("Name")
     
-    def get_unique_shelves(self) -> List[str]:
-        """Retrieves a list of all unique shelves for filter suggestions."""
+    def get_unique_shelves(self) -> list[str]:
         return self._get_unique_column_values("Shelf")
         
-    def get_unique_books(self) -> List[str]:
-        """Retrieves a list of all unique books for filter suggestions."""
+    def get_unique_books(self) -> list[str]:
         return self._get_unique_column_values("Book")
 
-    def get_unique_pages(self) -> List[str]:
-        """Retrieves a list of all unique pages for filter suggestions."""
+    def get_unique_pages(self) -> list[str]:
         return self._get_unique_column_values("Page")
 
-    def get_unique_notes(self) -> List[str]:
-        """Retrieves a list of all unique notes for filter suggestions."""
+    def get_unique_notes(self) -> list[str]:
         return self._get_unique_column_values("Note")
 
     def delete_measurement(self, measurement_id: int) -> bool:
-        """
-        Deletes a measurement record from the database by its ID
-        and also deletes its associated image files.
-        """
-        try:
-            self.cursor.execute("DELETE FROM measurements WHERE id = ?", (measurement_id,))
-            self.conn.commit()
-            return self.cursor.rowcount > 0
-        except sqlite3.Error as e:
-            print(f"Error deleting measurement with id {measurement_id}: {e}")
-            return False
-        
-    def delete_measurement(self, measurement_id: int) -> bool:
-        """
-        Deletes a measurement record from the database by its ID
-        and also deletes its associated image files.
-        """
         try:
             self.cursor.execute("SELECT RefImage, MatImage FROM measurements WHERE id = ?", (measurement_id,))
             row = self.cursor.fetchone()
             
-            # Delete the database row
             self.cursor.execute("DELETE FROM measurements WHERE id = ?", (measurement_id,))
             self.conn.commit()
             
             row_was_deleted = self.cursor.rowcount > 0
             
-            # If deletion was successful, delete the image files
             if row and row_was_deleted:
                 self._delete_image_file(row['RefImage'])
                 self._delete_image_file(row['MatImage'])
                 
             return row_was_deleted
         except sqlite3.Error as e:
-            print(f"Error deleting measurement with id {measurement_id}: {e}")
+            logger.error("Error deleting measurement with id %s: %s", measurement_id, e)
             return False
 
-    def _delete_image_file(self, filename: Optional[str]):
-        """
-        Safely deletes a single image file from the image directory.
-        """
+    def _delete_image_file(self, filename: str | None):
         if not filename:
             return
         try:
             file_path = self.image_dir_path / filename
             if file_path.exists():
                 os.remove(file_path)
-                print(f"Deleted image file: {file_path}")
+                logger.info("Deleted image file: %s", file_path)
             else:
-                print(f"Warning: Tried to delete file, but it was not found: {file_path}")
-        except (OSError, Exception) as e:
-            print(f"Error deleting image file {filename}: {e}")
+                logger.warning("Tried to delete file, but it was not found: %s", file_path)
+        except OSError as e:
+            logger.error("Error deleting image file %s: %s", filename, e)
 
     def close(self):
-        """Closes the database connection."""
         if self.conn:
             self.conn.close()

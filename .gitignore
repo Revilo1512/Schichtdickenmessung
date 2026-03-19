@@ -16,4 +16,5 @@ legacy/*
 src/experimentation
 src/layer_thickness_app/config/config.json
 .pytest_cache
-src/layer_thickness_app/gui/resources/introduction.mp4
+src/layer_thickness_app/gui/resources/tutorial.mp4
+app_log.txt

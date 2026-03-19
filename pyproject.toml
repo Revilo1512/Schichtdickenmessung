@@ -2,7 +2,7 @@
 name = "schichtdickenmessung"
 version = "0.1.0"
 authors = [
-  { name="Oliver Klager", email="oliver.klager@stud.hcw.fh-campuswien.ac.at" },
+  { name="Oliver Klager", email="oliver.klager@stud.hcw.ac.at" },
 ]
 description = "An application for measuring layer thickness."
 readme = "README.md"
@@ -13,11 +13,12 @@ dependencies = [
   "refractiveindex2",
   "pyueye",
   "PyQt6-Fluent-Widgets",
-  "pytubefix"
 ]
+
 [project.optional-dependencies]
 dev = [
-  "pytest"
+  "pytest",
+  "pyinstaller"
 ]
 
 [tool.setuptools.packages.find]

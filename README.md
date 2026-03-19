@@ -1,4 +1,4 @@
-# Layer Thickness Measurement Tool (Schichtdickenmessung)
+# Layer Thickness Measurement Tool
 
 ![Project Banner](data/banner.png) 
 
