@@ -1,243 +1,456 @@
-import base64
-import cv2
-import numpy as np
-import uuid
-import os
-import logging
-from typing import Any
-from PyQt6.QtGui import QIcon
+from __future__ import annotations
 
-from layer_thickness_app.gui.main_window import MainWindow
-from layer_thickness_app.services.camera_service import CameraService
-from layer_thickness_app.services.database_service import DatabaseService
-from layer_thickness_app.services.material_service import MaterialService
-from layer_thickness_app.services.calculation_service import CalculationService
-from layer_thickness_app.services.export_service import ExportService
-from layer_thickness_app.services.import_service import ImportService
-from layer_thickness_app.config.config import AppConfig 
+import cv2
+import uuid
+import logging
+from pathlib import Path
+from typing import Any
+
+from PyQt6.QtGui     import QIcon
+from PyQt6.QtWidgets import QApplication
+
+from layer_thickness_app.gui.main_window                  import MainWindow
+from layer_thickness_app.services.camera_service          import (
+    CameraService, FrameCaptureResult,
+)
+from layer_thickness_app.services.database_service        import DatabaseService
+from layer_thickness_app.services.material_service        import MaterialService
+from layer_thickness_app.services.calculation_service     import CalculationService
+from layer_thickness_app.services.plausibility_service    import (
+    PlausibilityService, PlausibilityResult, PlausibilitySeverity,
+)
+from layer_thickness_app.services.calibration_service     import (
+    CalibrationService, CalibrationModel,
+)
+from layer_thickness_app.services.msa_service             import MSAService
+from layer_thickness_app.services.export_service          import ExportService
+from layer_thickness_app.services.import_service          import ImportService
+from layer_thickness_app.config.config                    import AppConfig
 
 logger = logging.getLogger(__name__)
 
+BASE_DIR    = Path(__file__).resolve().parent.parent
+ICON_PATH   = BASE_DIR / "gui" / "resources" / "duck_icon.svg"
+DEFAULT_DB  = Path("data") / "measurements.db"
+
+
 class MainController:
     """
-    The central controller that manages the GUI and services.
-    Connects the signals to functions.
+    Orchestrates services and the main window.
+
+    Step 8 additions
+    ----------------
+    • Merges the optional `reference_thickness_nm` and `session_tag`
+      fields from the measure page into every saved measurement.
+    • After a successful save, refreshes the calibration/validation page
+      dropdowns so new sessions appear immediately without restart.
     """
+
     def __init__(self, config: AppConfig):
         self.config = config
 
-        self.db_service = DatabaseService("data/measurements.db")
-        self.export_service = ExportService(self.db_service)
-        self.import_service = ImportService(self.db_service)
-        self.material_service = MaterialService()
-        self.calculation_service = CalculationService()
-        self.camera_service = CameraService()
-
-        self.view = MainWindow(
-            db_service=self.db_service,
-            import_service=self.import_service,
-            export_service=self.export_service,
-            camera_service=self.camera_service,
-            config=self.config
+        # Core services
+        self.db_service           = DatabaseService(str(DEFAULT_DB))
+        self.export_service       = ExportService(self.db_service)
+        self.import_service       = ImportService(self.db_service)
+        self.material_service     = MaterialService()
+        self.plausibility_service = PlausibilityService()
+        self.calculation_service  = CalculationService(
+            plausibility_service=self.plausibility_service,
         )
-        icon_path = r"src\layer_thickness_app\gui\resources\duck_icon.svg"
-        if os.path.exists(icon_path):
-            self.view.setWindowIcon(QIcon(icon_path))
-        else:
-            logger.warning("Icon file not found at %s", icon_path)
+        self.camera_service       = CameraService()
 
-        self.measurement_page = self.view.measure_interface
+        # BA2 services
+        self.calibration_service  = CalibrationService(db_service=self.db_service)
+        self.msa_service          = MSAService()
+
+        # View
+        self.view = MainWindow(
+            db_service          = self.db_service,
+            import_service      = self.import_service,
+            export_service      = self.export_service,
+            camera_service      = self.camera_service,
+            calibration_service = self.calibration_service,
+            msa_service         = self.msa_service,
+            config              = self.config,
+        )
+
+        if ICON_PATH.exists():
+            self.view.setWindowIcon(QIcon(str(ICON_PATH)))
+        else:
+            logger.warning("Icon file not found at %s", ICON_PATH)
+
+        self.measurement_page  = self.view.measure_interface
+        self.calibration_page  = self.view.calibration_interface
+        self.validation_page   = self.view.validation_interface
+        self.history_page      = self.view.history_interface
+
         try:
-            data = self.material_service.get_material_data()
-            self.measurement_page.populate_material_selector(data)
+            self.measurement_page.populate_material_selector(
+                self.material_service.get_material_data()
+            )
         except Exception as e:
             logger.error("Couldn't load material data: %s", e)
-        
+
         self._connect_signals()
+
+    # ------------------------------------------------------------------
+    # Window lifecycle
+    # ------------------------------------------------------------------
 
     def show_window(self):
         self.view.show()
 
+    # ------------------------------------------------------------------
+    # Signal wiring
+    # ------------------------------------------------------------------
+
     def _connect_signals(self):
-        """Verbindet View-Signale mit Controller-Methoden (Saubere Entkopplung)"""
+        # Measure page
         self.measurement_page.calculation_requested.connect(self.on_start_calc)
         self.measurement_page.capture_reference_requested.connect(self.on_take_reference_image)
         self.measurement_page.capture_material_requested.connect(self.on_take_material_image)
         self.measurement_page.reset_requested.connect(self.on_reset_measurement)
         self.measurement_page.config_changed.connect(self._on_measure_config_changed)
 
+        # Calibration page
         try:
-            self.view.history_interface.data_changed.connect(
+            self.calibration_page.calibration_activated.connect(
+                self._on_calibration_activated
+            )
+        except AttributeError as e:
+            logger.warning("Calibration page signal not connected: %s", e)
+
+        # Cross-page refresh hooks
+        try:
+            self.history_page.data_changed.connect(
                 self.view.csv_interface._load_filter_suggestions
             )
             self.view.csv_interface.data_changed.connect(
-                self.view.history_interface._load_name_suggestions
+                self.history_page._load_name_suggestions
             )
+            self.history_page.data_changed.connect(self.calibration_page.refresh_data)
+            self.history_page.data_changed.connect(self.validation_page.refresh_data)
+            self.view.csv_interface.data_changed.connect(self.calibration_page.refresh_data)
+            self.view.csv_interface.data_changed.connect(self.validation_page.refresh_data)
             logger.info("Connected data_changed signals between pages.")
         except AttributeError as e:
-            logger.warning("Could not connect data_changed signals. %s", e)
-    
+            logger.warning("Could not connect data_changed signals: %s", e)
+
     def _on_measure_config_changed(self):
-        """Re-enables the calculate button when config changes."""
         self.measurement_page.set_calculation_enabled(True)
+
+    def _on_calibration_activated(self, calibration_id: int):
+        logger.info("New calibration activated: id=%s", calibration_id)
+        self.measurement_page.show_info_bar(
+            "Calibration Activated",
+            f"Calibration #{calibration_id} is now the active correction "
+            f"for its material / mode.",
+            duration=4000,
+        )
+        try:
+            self.validation_page.refresh_data()
+        except Exception as e:
+            logger.debug("validation_page refresh after activation failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # Capture slots
+    # ------------------------------------------------------------------
 
     def on_reset_measurement(self):
         logger.info("Resetting measurement page...")
         self.measurement_page.reset_all()
-        
+
+    def on_take_reference_image(self):
+        if not self._require_camera_connected():
+            return
+        n_frames = self.measurement_page.get_frame_count()
+        self.measurement_page.set_result_text(
+            f"Capturing reference ({n_frames} frame{'s' if n_frames > 1 else ''})..."
+        )
+        QApplication.processEvents()
+
+        capture = self.camera_service.capture_frame(n_frames=n_frames)
+        if capture is None:
+            self._fail("Capture Error",
+                       "Failed to capture reference image. Check camera connection.")
+            return
+
+        self.measurement_page.set_capture(capture, "reference")
+        self.measurement_page.set_result_text("Result...")
+        self.measurement_page.set_calculation_enabled(True)
+        self._surface_plausibility(
+            self.plausibility_service.check_reference(capture.gray_mean)
+        )
+
+    def on_take_material_image(self):
+        if not self._require_camera_connected():
+            return
+        n_frames = self.measurement_page.get_frame_count()
+        self.measurement_page.set_result_text(
+            f"Capturing sample ({n_frames} frame{'s' if n_frames > 1 else ''})..."
+        )
+        QApplication.processEvents()
+
+        capture = self.camera_service.capture_frame(n_frames=n_frames)
+        if capture is None:
+            self._fail("Capture Error",
+                       "Failed to capture sample image. Check camera connection.")
+            return
+
+        self.measurement_page.set_capture(capture, "material")
+        self.measurement_page.set_result_text("Result...")
+        self.measurement_page.set_calculation_enabled(True)
+
+        ref_gray = None
+        ref_cap  = self.measurement_page.reference_capture
+        if ref_cap is not None:
+            ref_gray = ref_cap.gray_mean
+        self._surface_plausibility(
+            self.plausibility_service.check_sample(capture.gray_mean, ref_gray)
+        )
+
+    # ------------------------------------------------------------------
+    # Calculation
+    # ------------------------------------------------------------------
+
     def on_start_calc(self):
         logger.info("Calculation started...")
         self.measurement_page.set_result_text("Calculating...")
+        QApplication.processEvents()
 
-        # --- 1. Get Data from View via Interface ---
-        ui_data = self.measurement_page.get_measurement_data()
-        ref_image = ui_data["ref_image"]
-        mat_image = ui_data["mat_image"]
-        material_path = ui_data["material_path"]
-        wavelength_um = ui_data["wavelength_um"]
+        ui = self.measurement_page.get_measurement_data()
 
-        # --- 2. Validate Data ---
-        if ref_image is None or mat_image is None:
-            logger.error("Reference or material image is missing.")
-            self.measurement_page.show_info_bar("Validation Error", "Missing one or both images.", is_error=True)
-            self.measurement_page.set_result_text("Error")
+        if ui["ref_capture"] is None or ui["mat_capture"] is None:
+            self._fail("Validation Error",
+                       "Please capture both reference and sample images first.")
             return
-            
-        if not material_path:
-            logger.error("No material dataset selected.")
-            self.measurement_page.show_info_bar("Validation Error", "No material selected.", is_error=True)
-            self.measurement_page.set_result_text("Error")
-            return
-            
-        if wavelength_um is None:
-            logger.error("No wavelength selected.")
-            self.measurement_page.show_info_bar("Validation Error", "No wavelength selected.", is_error=True)
-            self.measurement_page.set_result_text("Error")
-            return
-        
+        if not ui["material_path"]:
+            self._fail("Validation Error", "No material selected."); return
+        if ui["wavelength_um"] is None:
+            self._fail("Validation Error", "No wavelength selected."); return
+
         try:
-            shelf, book, page = material_path.split('/')
+            shelf, book, page = ui["material_path"].split("/")
         except ValueError:
-            logger.error("Invalid material path format: %s", material_path)
-            self.measurement_page.show_info_bar("Internal Error", f"Invalid format: {material_path}", is_error=True)
-            self.measurement_page.set_result_text("Error")
-            return
-            
-        logger.info("Validated data. Calculating with Material: %s, Wavelength: %sµm", material_path, wavelength_um)
+            self._fail("Internal Error", f"Invalid material path: {ui['material_path']}"); return
 
-        # --- 3. Call Service and Display Result ---
+        ref_capture: FrameCaptureResult = ui["ref_capture"]
+        mat_capture: FrameCaptureResult = ui["mat_capture"]
+
+        logger.info(
+            "Calculating | material=%s | λ=%s µm | n=%d/%d frames | ref_nm=%s | session=%s",
+            ui["material_path"], ui["wavelength_um"],
+            ref_capture.frames_used, mat_capture.frames_used,
+            ui["reference_thickness_nm"], ui["session_tag"],
+        )
+
         try:
-            thickness_nm, error_msg = self.calculation_service.calculate_thickness(
-                ref_image, mat_image, shelf, book, page, wavelength_um
+            thickness_nm, error_msg, capture_stats = (
+                self.calculation_service.calculate_thickness_from_captures(
+                    ref_capture, mat_capture, shelf, book, page, ui["wavelength_um"]
+                )
             )
-            
-            if error_msg:
-                logger.error("Calculation Error: %s", error_msg)
-                self.measurement_page.show_info_bar("Calculation Error", error_msg, is_error=True)
-                self.measurement_page.set_result_text("Error")
-            elif thickness_nm is not None:
-                result_text = f"{thickness_nm:.2f} nm"
-                logger.info("Calculation successful. Result: %s", result_text)
-                self.measurement_page.set_result_text(f"<b>{result_text}</b>")
-                
-                # --- 4. Save to Database (if checked) ---
-                if ui_data["save_checked"]:
-                    self._save_measurement_to_db(
-                        thickness=thickness_nm,
-                        wavelength=wavelength_um,
-                        ref_image=ref_image,
-                        mat_image=mat_image,
-                        shelf=shelf,
-                        book=book,
-                        page=page,
-                        ui_data=ui_data
-                    )
-                    self.measurement_page.set_result_text(result_text, append=True)
-
         except Exception as e:
             logger.exception("UNHANDLED EXCEPTION in calculation: %s", e)
-            self.measurement_page.show_info_bar("Unhandled Error", str(e), is_error=True)
-            self.measurement_page.set_result_text("Error")
-        
-        finally:
-            self.measurement_page.set_calculation_enabled(False)
+            self._fail("Unhandled Error", str(e)); return
 
-    def _save_measurement_to_db(self, thickness: float, wavelength: float, 
-                                ref_image: np.ndarray, mat_image: np.ndarray, 
-                                shelf: str, book: str, page: str, ui_data: dict[str, Any]):
+        if error_msg:
+            self._fail("Calculation Error", error_msg); return
+
+        # Apply active calibration
+        mode = capture_stats.get("Mode", "single")
+        corrected_nm = self._apply_active_calibration(
+            raw_thickness_nm = thickness_nm,
+            shelf=shelf, book=book, page=page,
+            wavelength_um = float(ui["wavelength_um"]),
+            mode          = mode,
+        )
+        if corrected_nm is not None:
+            capture_stats["ThicknessCorrected"] = round(corrected_nm, 4)
+
+        # Render result
+        result_html = self._format_result_html(thickness_nm, corrected_nm)
+        self.measurement_page.set_result_text(result_html)
+        logger.info(
+            "Calculation successful: raw=%.4f nm, corrected=%s",
+            thickness_nm,
+            f"{corrected_nm:.4f} nm" if corrected_nm is not None else "—",
+        )
+
+        # Non-blocking plausibility warning
+        if capture_stats.get("plausibility_severity") == PlausibilitySeverity.WARNING.value:
+            self.measurement_page.show_info_bar(
+                title      = capture_stats.get("plausibility_title", "Warning"),
+                content    = capture_stats.get("plausibility_message", ""),
+                is_warning = True,
+            )
+
+        # Save to DB
+        if ui["save_checked"]:
+            self._save_measurement_to_db(
+                thickness       = thickness_nm,
+                wavelength      = ui["wavelength_um"],
+                ref_image       = ref_capture.image,
+                mat_image       = mat_capture.image,
+                shelf=shelf, book=book, page=page,
+                ui_data         = ui,
+                capture_stats   = capture_stats,
+            )
+            self.measurement_page.set_result_text(result_html, append=True)
+
+        self.measurement_page.set_calculation_enabled(False)
+
+    # ------------------------------------------------------------------
+    # Calibration helpers
+    # ------------------------------------------------------------------
+
+    def _apply_active_calibration(
+        self,
+        raw_thickness_nm: float,
+        shelf: str, book: str, page: str,
+        wavelength_um: float, mode: str,
+    ) -> float | None:
+        try:
+            model: CalibrationModel | None = self.calibration_service.load_active(
+                shelf=shelf, book=book, page=page,
+                wavelength_um=wavelength_um, mode=mode,
+            )
+        except Exception as e:
+            logger.warning("Active-calibration lookup failed: %s", e)
+            return None
+
+        if model is None:
+            return None
+
+        corrected = model.predict(raw_thickness_nm)
+
+        if not model.is_in_range(raw_thickness_nm):
+            logger.warning(
+                "Raw value %.3f nm outside calibration range (%.1f–%.1f nm).",
+                raw_thickness_nm, model.min_ref_nm, model.max_ref_nm,
+            )
+            self.measurement_page.show_info_bar(
+                "Extrapolation Warning",
+                f"Raw value {raw_thickness_nm:.2f} nm is outside the "
+                f"calibration range "
+                f"({model.min_ref_nm:g}–{model.max_ref_nm:g} nm). "
+                f"Corrected value may be unreliable.",
+                is_warning=True,
+            )
+        return corrected
+
+    @staticmethod
+    def _format_result_html(raw_nm: float, corrected_nm: float | None) -> str:
+        raw_str = f"{raw_nm:.2f} nm"
+        if corrected_nm is None:
+            return f"<b>{raw_str}</b>"
+        corr_str = f"{corrected_nm:.2f} nm"
+        return (
+            f"<div style='line-height:1.2em;'>"
+            f"<span style='font-size:10pt; color: gray;'>Raw&nbsp;{raw_str}</span><br>"
+            f"<b>Corrected {corr_str}</b>"
+            f"</div>"
+        )
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def _save_measurement_to_db(
+        self,
+        thickness:     float,
+        wavelength:    float,
+        ref_image,
+        mat_image,
+        shelf:         str,
+        book:          str,
+        page:          str,
+        ui_data:       dict[str, Any],
+        capture_stats: dict[str, Any],
+    ):
         logger.info("Saving measurement to database...")
         try:
             name = ui_data["name"] if (ui_data["use_name"] and ui_data["name"]) else "Guest"
-            note = ui_data["note"]
+            note = ui_data["note"] or None
 
             ref_img_name = f"ref_{uuid.uuid4()}.png"
             mat_img_name = f"mat_{uuid.uuid4()}.png"
-            
+
             image_dir = self.db_service.image_dir_path
-            ref_img_path = str(image_dir / ref_img_name)
-            mat_img_path = str(image_dir / mat_img_name)
+            cv2.imwrite(str(image_dir / ref_img_name), ref_image)
+            cv2.imwrite(str(image_dir / mat_img_name), mat_image)
 
-            cv2.imwrite(ref_img_path, ref_image)
-            cv2.imwrite(mat_img_path, mat_image)
-            
-            logger.info("Saved images to %s and %s", ref_img_path, mat_img_path)
-
-            db_data = {
-                "Name": name,
-                "Layer": thickness,
+            db_data: dict[str, Any] = {
+                "Name":       name,
+                "Layer":      thickness,
                 "Wavelength": wavelength,
-                "RefImage": ref_img_name,
-                "MatImage": mat_img_name,
-                "Shelf": shelf,
-                "Book": book,
-                "Page": page,
-                "Note": note if note else None
+                "RefImage":   ref_img_name,
+                "MatImage":   mat_img_name,
+                "Shelf":      shelf,
+                "Book":       book,
+                "Page":       page,
+                "Note":       note,
             }
-            
+            db_data.update(capture_stats)
+
+            # Step 8: merge reference thickness and session tag when set
+            if ui_data.get("reference_thickness_nm") is not None:
+                db_data["ReferenceThickness"] = float(ui_data["reference_thickness_nm"])
+            if ui_data.get("session_tag"):
+                db_data["SessionTag"] = str(ui_data["session_tag"])
+
             row_id = self.db_service.save_measurement(db_data)
-            logger.info("Measurement saved successfully with ID: %s", row_id)
-            self.measurement_page.show_info_bar("Success", f"Measurement saved with ID: {row_id}", is_error=False)
+            if row_id <= 0:
+                raise RuntimeError("DatabaseService.save_measurement returned -1")
+
+            logger.info("Measurement saved with ID %s.", row_id)
+            self.measurement_page.show_info_bar(
+                "Success", f"Measurement saved (ID {row_id}).",
+            )
+
+            # If this measurement contributed calibration data, refresh
+            # the calibration/validation pickers so the new session tag
+            # or reference thickness appears there without a restart.
+            if db_data.get("ReferenceThickness") is not None or db_data.get("SessionTag"):
+                try:
+                    self.calibration_page.refresh_data()
+                    self.validation_page.refresh_data()
+                except Exception as e:
+                    logger.debug("Refresh after save failed: %s", e)
 
         except Exception as e:
             logger.exception("Failed to save measurement: %s", e)
-            self.measurement_page.show_info_bar("Save Error", "Failed to save measurement.", is_error=True)
+            self.measurement_page.show_info_bar(
+                "Save Error", "Failed to save measurement.", is_error=True,
+            )
 
-    def on_take_reference_image(self):
-        if not self.camera_service.get_status()["connected"]:
-            logger.error("Cannot capture image, camera is not connected.")
-            self.measurement_page.show_info_bar("Camera Error", "Camera is not connected. Please connect it on the Home page.", is_error=True)
+    # ------------------------------------------------------------------
+    # Small helpers
+    # ------------------------------------------------------------------
+
+    def _require_camera_connected(self) -> bool:
+        if self.camera_service.get_status()["connected"]:
+            return True
+        logger.error("Capture requested but camera is not connected.")
+        self.measurement_page.show_info_bar(
+            "Camera Error",
+            "Camera is not connected. Please connect it on the Home page.",
+            is_error=True,
+        )
+        return False
+
+    def _fail(self, title: str, message: str):
+        logger.error("%s: %s", title, message)
+        self.measurement_page.show_info_bar(title, message, is_error=True)
+        self.measurement_page.set_result_text("Error")
+
+    def _surface_plausibility(self, result: PlausibilityResult):
+        if result.severity is PlausibilitySeverity.OK:
             return
-
-        logger.info("Taking Reference Image...")
-        self.measurement_page.set_result_text("Taking Reference Image...")
-        image_data = self.camera_service.capture_image()
-        
-        if image_data is not None:
-            self.measurement_page.set_image(image_data, "reference")
-            logger.info("Reference Image captured and displayed.")
-            self.measurement_page.set_result_text("Result...")
-            self.measurement_page.set_calculation_enabled(True)
-        else:
-            logger.error("Failed to capture reference image.")
-            self.measurement_page.show_info_bar("Capture Error", "Failed to capture reference image.", is_error=True)
-            self.measurement_page.set_result_text("Error")
-
-    def on_take_material_image(self):
-        if not self.camera_service.get_status()["connected"]:
-            logger.error("Cannot capture image, camera is not connected.")
-            self.measurement_page.show_info_bar("Camera Error", "Camera is not connected. Please connect it on the Home page.", is_error=True)
-            return
-            
-        logger.info("Taking Material Image...")
-        self.measurement_page.set_result_text("Taking Material Image...")
-        image_data = self.camera_service.capture_image()
-        
-        if image_data is not None:
-            self.measurement_page.set_image(image_data, "material")
-            logger.info("Material Image captured and displayed.")
-            self.measurement_page.set_result_text("Result...")
-            self.measurement_page.set_calculation_enabled(True)
-        else:
-            logger.error("Failed to capture material image.")
-            self.measurement_page.show_info_bar("Capture Error", "Failed to capture material image.", is_error=True)
-            self.measurement_page.set_result_text("Error")
+        self.measurement_page.show_info_bar(
+            title      = result.title,
+            content    = result.message,
+            is_error   = result.is_error,
+            is_warning = result.is_warning,
+        )

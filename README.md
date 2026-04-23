@@ -2,13 +2,13 @@
 
 ![Project Banner](data/banner.png) 
 
-## 📖 About The Project
+## About The Project
 
 This project, developed as part of **Wahlfachprojekt 2 (WFP2)** at **FH Campus Wien**, provides a standalone graphical application for measuring layer thickness using transmission measurement principles.
 
 The application extends an existing Python code base by providing a user-friendly interface to control an **IDS Industrial Camera**, manage material constants, and perform complex calculations. It ensures data persistence via a local database and offers tools for historical data analysis and export.
 
-## ✨ Key Features
+## Key Features
 
 * **Step-by-Step Measurement:** A guided workflow to capture reference and material images and calculate thickness.
 * **Hardware Integration:** Direct control of IDS cameras (specifically UI-1240LE-C-HQ) with live preview and connection management.
@@ -18,7 +18,7 @@ The application extends an existing Python code base by providing a user-friendl
 * **Import/Export:** Support for exporting measurement data to CSV/ZIP formats for external analysis.
 * **Onboarding:** Includes an introductory video (downloaded on first run) to guide new users.
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 * **Language:** Python 3.12+
 * **GUI:** PyQt6 & PyQt6-Fluent-Widgets (Windows 11 style components)
@@ -28,7 +28,7 @@ The application extends an existing Python code base by providing a user-friendl
 * **Data Sources:** `refractiveindex2` (Material constants), `pytubefix` (Video resources)
 * **Dependency Management:** `uv`
 
-## ⚙️ Prerequisites
+## Prerequisites
 
 Before running the application, ensure you have the following hardware and software:
 
@@ -39,7 +39,7 @@ Before running the application, ensure you have the following hardware and softw
 * **IDS Software Suite:** Download and install the newest version (Extended version necessary for `pyueye` support) from the [official IDS homepage](https://en.ids-imaging.com/downloads.html).
 * **Python Package Manager:** This project uses `uv` for fast package management.
 
-## 🚀 Installation
+## Installation
 
 ### Option A: Using `uv` (Recommended)
 
@@ -100,7 +100,7 @@ Before running the application, ensure you have the following hardware and softw
     python src/layer_thickness_app/main.py
     ```
 
-## 🖥️ Usage
+## Usage
 
 1.  **Home:** Upon launching, check the "Camera Status" panel to ensure your IDS camera is connected and recognized.
 2.  **Measure:**
@@ -111,10 +111,9 @@ Before running the application, ensure you have the following hardware and softw
 3.  **History:** View past measurements. Use the filter options (Date, Name, Material) to find specific records.
 4.  **Settings:** Configure theme (Light/Dark) and application defaults.
 
-## 📂 Project Structure
+## Project Structure
 
 The project is managed with `uv` and follows this structure:
 
 * `src/`: Contains the main application logic (`services`, `controllers`, `gui`).
 * `data/`: Stores the SQLite database (`measurements.db`) and captured images.
-* `tests/`: Unit tests for calculation and database services.

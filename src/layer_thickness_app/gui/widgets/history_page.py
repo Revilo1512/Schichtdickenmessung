@@ -1,41 +1,87 @@
+from __future__ import annotations
+
 import logging
 from typing import Any
 
-from PyQt6.QtCore import Qt, QDate, pyqtSignal
+from PyQt6.QtCore    import Qt, QDate, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QTableWidgetItem,
-    QAbstractItemView,
-    QHeaderView,
+    QWidget, QVBoxLayout, QHBoxLayout, QTableWidgetItem,
+    QAbstractItemView, QHeaderView, QInputDialog, QMenu,
 )
 from qfluentwidgets import (
-    BodyLabel,
-    CaptionLabel,
-    ComboBox,
-    DatePicker,
-    PrimaryPushButton,
-    PushButton,
-    TableWidget,
-    ToolButton,
-    FluentIcon,
-    SubtitleLabel,
-    InfoBar,
-    InfoBarPosition,
-    MessageBox,
+    BodyLabel, CaptionLabel, ComboBox, DatePicker,
+    PrimaryPushButton, PushButton, TableWidget, ToolButton,
+    FluentIcon, SubtitleLabel, InfoBar, InfoBarPosition, MessageBox,
 )
 
 from layer_thickness_app.services.database_service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
+
 class HistoryPage(QWidget):
     """
-    A page to display, filter, and paginate measurement history.
+    Measurement-history browser with filtering, pagination, inline
+    editing and bulk deletion.
+
+    Step 8 changes
+    --------------
+    • Adds BA2 columns to the table: Mode, Frames, Ref (nm),
+      Corr. (nm), Session.  The layer and reference columns now display
+      together so the user can visually verify calibration data.
+    • Decouples `_load_name_suggestions()` from `_refresh_data()` — it
+      only runs when the underlying data actually changed (after a
+      delete/import, or on explicit user request).
+    • Adds inline editing via:
+        – Double-click on the Ref / Session / Note cells opens an
+          input dialog for that single row.
+        – Right-click opens a context menu with the same actions.
+      Both paths write through the DatabaseService and refresh the row.
     """
 
     data_changed = pyqtSignal()
+
+    # Column indices
+    _COL_ID        = 0
+    _COL_DATE      = 1
+    _COL_NAME      = 2
+    _COL_LAYER     = 3
+    _COL_CORRECTED = 4
+    _COL_REF       = 5
+    _COL_WAVE      = 6
+    _COL_MODE      = 7
+    _COL_FRAMES    = 8
+    _COL_SHELF     = 9
+    _COL_BOOK      = 10
+    _COL_PAGE      = 11
+    _COL_SESSION   = 12
+    _COL_NOTE      = 13
+
+    # DB column name for each table column (None where there is no DB column)
+    _COL_DB_KEY: dict[int, str | None] = {
+        _COL_ID:        "id",
+        _COL_DATE:      "Date",
+        _COL_NAME:      "Name",
+        _COL_LAYER:     "Layer",
+        _COL_CORRECTED: "ThicknessCorrected",
+        _COL_REF:       "ReferenceThickness",
+        _COL_WAVE:      "Wavelength",
+        _COL_MODE:      "Mode",
+        _COL_FRAMES:    "FrameCount",
+        _COL_SHELF:     "Shelf",
+        _COL_BOOK:      "Book",
+        _COL_PAGE:      "Page",
+        _COL_SESSION:   "SessionTag",
+        _COL_NOTE:      "Note",
+    }
+
+    # User-facing labels
+    _COL_LABELS = [
+        "ID",       "Date",       "Name",       "Layer (nm)",
+        "Corr. (nm)", "Ref (nm)", "λ (µm)",
+        "Mode",     "Frames",     "Shelf",      "Book",
+        "Page",     "Session",    "Note",
+    ]
 
     def __init__(self, db_service: DatabaseService, parent: QWidget | None = None):
         super().__init__(parent)
@@ -43,176 +89,139 @@ class HistoryPage(QWidget):
         self.setObjectName("HistoryPage")
 
         # Pagination state
-        self.current_page = 1
-        self.items_per_page = 20
-        self.total_items = 0
-        self.total_pages = 1
+        self.current_page     = 1
+        self.items_per_page   = 20
+        self.total_items      = 0
+        self.total_pages      = 1
 
-        # Define table headers (must match DB columns)
-        self.headers = [
-            "id",
-            "Date",
-            "Name",
-            "Layer",
-            "Wavelength",
-            "Shelf",
-            "Book",
-            "Page",
-            "Note",
-        ]
-        self.header_labels = [
-            "ID",
-            "Date",
-            "Name",
-            "Layer (nm)",
-            "λ (µm)",
-            "Shelf",
-            "Book",
-            "Page",
-            "Note",
-        ]
-
-        # --- UI Initialization ---
         self._init_widgets()
         self._init_layout()
         self._connect_signals()
 
-        # --- Initial Data Load ---
+        # Initial one-off load of filter suggestions
         self._load_name_suggestions()
-        self._refresh_data()  # Load data on startup
+        self._refresh_data()
+
+    # ==================================================================
+    # Widget / layout
+    # ==================================================================
 
     def _init_widgets(self):
-        """Initialize all UI widgets."""
-        self.filter_title = SubtitleLabel("Filters")
+        self.filter_title   = SubtitleLabel("Filters")
 
-        self.name_filter = ComboBox(self)
-        self.name_filter.setPlaceholderText("Filter by name...")
-
-        self.start_date_filter = DatePicker(self)
-        self.start_date_filter.setDate(QDate(2024, 1, 1))
-
-        self.end_date_filter = DatePicker(self)
-        self.end_date_filter.setDate(QDate(2030, 12, 31))
+        self.name_filter    = ComboBox(self); self.name_filter.setPlaceholderText("Filter by name...")
+        self.start_date_filter = DatePicker(self); self.start_date_filter.setDate(QDate(2024, 1, 1))
+        self.end_date_filter   = DatePicker(self); self.end_date_filter.setDate(QDate(2030, 12, 31))
 
         self.sort_order_combo = ComboBox(self)
         self.sort_order_combo.addItems(["Newest First", "Oldest First"])
-        self.sort_order_combo.setCurrentIndex(0)
 
-        # Filter Buttons
         self.filter_button = PrimaryPushButton("Apply Filters", self)
         self.delete_button = ToolButton(FluentIcon.DELETE, self)
         self.delete_button.setToolTip("Delete filtered data")
-        self.reset_button = PushButton("Reset", self)
+        self.reset_button  = PushButton("Reset", self)
         self.refresh_button = ToolButton(FluentIcon.SYNC, self)
-        self.refresh_button.setToolTip("Refresh data")
+        self.refresh_button.setToolTip("Refresh data (reloads filter suggestions too)")
 
-        # Data Table
+        # Table
         self.table = TableWidget(self)
-        self.table.setColumnCount(len(self.header_labels))
-        self.table.setHorizontalHeaderLabels(self.header_labels)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)  # Read-only
+        self.table.setColumnCount(len(self._COL_LABELS))
+        self.table.setHorizontalHeaderLabels(self._COL_LABELS)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().hide()
-        
-        # Header Resizing
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)  # ID
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)  # Date
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)  # Name
-        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)      # Note (stretch)
-        
-        self.table.setColumnWidth(0, 80)
-        self.table.setColumnWidth(1, 160)
-        self.table.setColumnWidth(2, 120)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
-        # Pagination Controls
-        self.prev_button = ToolButton(FluentIcon.LEFT_ARROW, self)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(self._COL_NOTE, QHeaderView.ResizeMode.Stretch)
+
+        # Reasonable default widths
+        self.table.setColumnWidth(self._COL_ID,        50)
+        self.table.setColumnWidth(self._COL_DATE,      150)
+        self.table.setColumnWidth(self._COL_NAME,      100)
+        self.table.setColumnWidth(self._COL_LAYER,     85)
+        self.table.setColumnWidth(self._COL_CORRECTED, 85)
+        self.table.setColumnWidth(self._COL_REF,       80)
+        self.table.setColumnWidth(self._COL_WAVE,      65)
+        self.table.setColumnWidth(self._COL_MODE,      60)
+        self.table.setColumnWidth(self._COL_FRAMES,   65)
+        self.table.setColumnWidth(self._COL_SHELF,    70)
+        self.table.setColumnWidth(self._COL_BOOK,     70)
+        self.table.setColumnWidth(self._COL_PAGE,     70)
+        self.table.setColumnWidth(self._COL_SESSION, 110)
+
+        # Pagination
+        self.prev_button = ToolButton(FluentIcon.LEFT_ARROW,  self)
         self.next_button = ToolButton(FluentIcon.RIGHT_ARROW, self)
-        self.page_label = CaptionLabel("Page 1 of 1", self)
+        self.page_label  = CaptionLabel("Page 1 of 1", self)
         self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
     def _init_layout(self):
-        """Set up the layout."""
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(40, 20, 40, 20)
-        self.main_layout.setSpacing(15)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(40, 20, 40, 20)
+        root.setSpacing(15)
 
-        # Filter layout - Line 1 (Filters)
-        filter_layout_1 = QHBoxLayout()
-        filter_layout_1.addWidget(self.filter_title)
-        filter_layout_1.addStretch(1)
-        filter_layout_1.addWidget(BodyLabel("Name:", self))
-        filter_layout_1.addWidget(self.name_filter, 1)  # Name filter can stretch
-        filter_layout_1.addSpacing(10)
-        filter_layout_1.addWidget(BodyLabel("From:", self))
-        filter_layout_1.addWidget(self.start_date_filter)
-        filter_layout_1.addSpacing(5)
-        filter_layout_1.addWidget(BodyLabel("To:", self))
-        filter_layout_1.addWidget(self.end_date_filter)
+        row1 = QHBoxLayout()
+        row1.addWidget(self.filter_title)
+        row1.addStretch(1)
+        row1.addWidget(BodyLabel("Name:", self))
+        row1.addWidget(self.name_filter, 1)
+        row1.addSpacing(10)
+        row1.addWidget(BodyLabel("From:", self)); row1.addWidget(self.start_date_filter)
+        row1.addSpacing(5)
+        row1.addWidget(BodyLabel("To:", self));   row1.addWidget(self.end_date_filter)
 
-        # Filter layout - Line 2 (Sort and Buttons)
-        filter_layout_2 = QHBoxLayout()
-        filter_layout_2.addStretch(1)
-        filter_layout_2.addWidget(BodyLabel("Sort:", self))
-        filter_layout_2.addWidget(self.sort_order_combo)
-        filter_layout_2.addSpacing(10)
-        filter_layout_2.addWidget(self.filter_button)
-        filter_layout_2.addWidget(self.reset_button)
-        filter_layout_2.addWidget(self.refresh_button)
-        filter_layout_2.addWidget(self.delete_button)
+        row2 = QHBoxLayout()
+        row2.addStretch(1)
+        row2.addWidget(BodyLabel("Sort:", self))
+        row2.addWidget(self.sort_order_combo)
+        row2.addSpacing(10)
+        row2.addWidget(self.filter_button)
+        row2.addWidget(self.reset_button)
+        row2.addWidget(self.refresh_button)
+        row2.addWidget(self.delete_button)
 
-        # Pagination layout
-        nav_layout = QHBoxLayout()
-        nav_layout.addStretch(1)
-        nav_layout.addWidget(self.prev_button)
-        nav_layout.addWidget(self.page_label)
-        nav_layout.addWidget(self.next_button)
-        nav_layout.addStretch(1)
+        hint = CaptionLabel(
+            "Tip: double-click a row in Ref, Session or Note to edit.", self,
+        )
+        hint.setStyleSheet("color: gray;")
 
-        # Add to main layout
-        self.main_layout.addLayout(filter_layout_1)
-        self.main_layout.addLayout(filter_layout_2)
-        self.main_layout.addWidget(self.table, 1)  # Table gets all the stretch
-        self.main_layout.addLayout(nav_layout)
+        nav = QHBoxLayout()
+        nav.addStretch(1)
+        nav.addWidget(self.prev_button)
+        nav.addWidget(self.page_label)
+        nav.addWidget(self.next_button)
+        nav.addStretch(1)
+
+        root.addLayout(row1)
+        root.addLayout(row2)
+        root.addWidget(hint)
+        root.addWidget(self.table, 1)
+        root.addLayout(nav)
 
     def _connect_signals(self):
-        """Connect widget signals to slots."""
         self.filter_button.clicked.connect(self._on_filter_apply)
         self.delete_button.clicked.connect(self._on_delete_filtered)
         self.reset_button.clicked.connect(self._on_filter_reset)
-        self.refresh_button.clicked.connect(self._on_filter_apply)
+        self.refresh_button.clicked.connect(self._on_full_refresh)
         self.sort_order_combo.currentIndexChanged.connect(self._on_filter_apply)
         self.prev_button.clicked.connect(self._on_prev_page)
         self.next_button.clicked.connect(self._on_next_page)
 
-    def _load_name_suggestions(self):
-        """
-        Fetches unique names from DB and populates the ComboBox.
-        Tries to preserve the currently selected item.
-        """
-        current_name = self.name_filter.currentText()
+        # Inline edit
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        self.table.customContextMenuRequested.connect(self._on_context_menu)
 
-        names = self.db_service.get_unique_names()
-
-        self.name_filter.blockSignals(True)  # Prevent signals during update
-        self.name_filter.clear()
-        self.name_filter.addItems(names)
-
-        # Try to restore the selection
-        if current_name in names:
-            self.name_filter.setCurrentText(current_name)
-        else:
-            self.name_filter.setCurrentIndex(-1)
-
-        self.name_filter.blockSignals(False)  # Re-enable signals
+    # ==================================================================
+    # Filter handlers
+    # ==================================================================
 
     def _on_filter_apply(self):
-        """Resets to page 1 and refreshes data based on filters."""
         self.current_page = 1
         self._refresh_data()
 
     def _on_filter_reset(self):
-        """Clears all filters, resets to page 1, and refreshes."""
         self.name_filter.setCurrentIndex(-1)
         self.start_date_filter.setDate(QDate(2024, 1, 1))
         self.end_date_filter.setDate(QDate(2030, 12, 31))
@@ -220,188 +229,326 @@ class HistoryPage(QWidget):
         self.current_page = 1
         self._refresh_data()
 
+    def _on_full_refresh(self):
+        """Refresh button: also reload the Name combo from the DB."""
+        self._load_name_suggestions()
+        self._refresh_data()
+
     def _on_prev_page(self):
-        """Goes to the previous page."""
         if self.current_page > 1:
             self.current_page -= 1
             self._refresh_data()
 
     def _on_next_page(self):
-        """Goes to the next page."""
         if self.current_page < self.total_pages:
             self.current_page += 1
             self._refresh_data()
 
+    # ==================================================================
+    # Data loading
+    # ==================================================================
+
+    def _load_name_suggestions(self):
+        """
+        Repopulates the Name filter combo.  Tries to preserve the current
+        selection.  Called only on initial load, on 'Refresh', and via
+        the external `data_changed` signal — NOT during every pagination.
+        """
+        current_name = self.name_filter.currentText()
+        names = self.db_service.get_unique_names()
+        self.name_filter.blockSignals(True)
+        self.name_filter.clear()
+        self.name_filter.addItems(names)
+        if current_name in names:
+            self.name_filter.setCurrentText(current_name)
+        else:
+            self.name_filter.setCurrentIndex(-1)
+        self.name_filter.blockSignals(False)
+
     def _get_current_filters(self) -> dict[str, Any]:
-        """Helper to get all filter values."""
-        name = self.name_filter.currentText()
-        if not name:
-            name = None
-
-        start_date_q = self.start_date_filter.date
-        start_date_str = (
-            start_date_q.toString("yyyy-MM-dd") if start_date_q.isValid() else None
-        )
-
-        end_date_q = self.end_date_filter.date
-        end_date_str = (
-            end_date_q.toString("yyyy-MM-dd") if end_date_q.isValid() else None
-        )
-
+        name = self.name_filter.currentText() or None
+        start = self.start_date_filter.date
+        end   = self.end_date_filter.date
         return {
             "name_filter": name,
-            "start_date": start_date_str,
-            "end_date": end_date_str,
-            # Note: not filtering by note on this page, just displaying it.
+            "start_date":  start.toString("yyyy-MM-dd") if start.isValid() else None,
+            "end_date":    end.toString("yyyy-MM-dd")   if end.isValid()   else None,
         }
 
-    def _on_delete_filtered(self):
-        """
-        Shows a confirmation dialog before deleting all measurements
-        that match the current filters.
-        """
-        filters = self._get_current_filters()
-        count = self.db_service.get_measurements_count(**filters)
-
-        if count == 0:
-            self._show_info_bar(
-                "No Data", "No items match the filters to delete.", is_error=True
-            )
-            return
-
-        title = "Delete Measurements?"
-        content = (
-            f"You are about to permanently delete {count} measurement(s) matching the current filters.\n\n"
-            "This will also delete their associated image files.\n"
-            "Are you sure you want to continue?"
-        )
-
-        # Use qfluentwidgets' MessageBox
-        w = MessageBox(title, content, self)
-        w.yesButton.setText("Delete")
-        w.cancelButton.setText("Cancel")
-
-        if w.exec():
-            self._perform_deletion(filters)
-
-    def _perform_deletion(self, filters: dict[str, Any]):
-        """
-        Performs the actual deletion after confirmation.
-        Fetches all matching IDs and deletes them one by one.
-        """
-        try:
-            # Get *all* records to delete, not just one page
-            measurements_to_delete = self.db_service.get_all_filtered_measurements(**filters)
-            deleted_count = 0
-
-            if not measurements_to_delete:
-                self._show_info_bar(
-                    "No Data", "No items found to delete.", is_error=True
-                )
-                return
-                
-            # Delete one by one to ensure images are also deleted (as per db_service logic)
-            for record in measurements_to_delete:
-                if self.db_service.delete_measurement(record["id"]):
-                    deleted_count += 1
-
-            self._show_info_bar(
-                "Success",
-                f"Successfully deleted {deleted_count} measurement(s).",
-                is_error=False,
-            )
-
-            if deleted_count > 0:
-                self.data_changed.emit()
-
-            # As requested: reset filters and refresh
-            self._on_filter_reset()  
-            
-        except Exception as e:
-            logger.exception("Error during bulk deletion: %s", e)
-            self._show_info_bar(
-                "Deletion Error", f"An unexpected error occurred: {e}", is_error=True
-            )
-
-    def _show_info_bar(self, title: str, content: str, is_error: bool = False):
-        """Shows a success or error InfoBar message."""
-        if is_error:
-            InfoBar.error(
-                title=title,
-                content=content,
-                duration=5000,
-                parent=self,
-                position=InfoBarPosition.TOP,
-            )
-        else:
-            InfoBar.success(
-                title=title,
-                content=content,
-                duration=3000,
-                parent=self,
-                position=InfoBarPosition.TOP,
-            )
-
     def _refresh_data(self):
-        """
-        Fetches the correct data from the DB based on filters and
-        current page, then updates the table and pagination controls.
-        """
-        # 1. Get filter values
-        filters = self._get_current_filters()
+        """Reloads the current page.  Does NOT reload the Name combo."""
+        filters  = self._get_current_filters()
         sort_dir = "DESC" if self.sort_order_combo.currentIndex() == 0 else "ASC"
 
-        # 2. Update total count and pages
         self.total_items = self.db_service.get_measurements_count(**filters)
         self.total_pages = max(
             1, (self.total_items + self.items_per_page - 1) // self.items_per_page
         )
-
-        # Adjust current page if it's now out of bounds (e.g., after filtering)
         self.current_page = min(self.current_page, self.total_pages)
 
-        # 3. Fetch data for the current page
         measurements = self.db_service.get_measurements(
             **filters,
-            page_num=self.current_page,
-            per_page=self.items_per_page,
-            order_by="Date",
-            order_dir=sort_dir,
+            page_num  = self.current_page,
+            per_page  = self.items_per_page,
+            order_by  = "Date",
+            order_dir = sort_dir,
         )
 
-        # 4. Populate the table
         self._populate_table(measurements)
-        self._load_name_suggestions()
 
-        # 5. Update pagination controls
         self.page_label.setText(f"Page {self.current_page} of {self.total_pages}")
         self.prev_button.setEnabled(self.current_page > 1)
         self.next_button.setEnabled(self.current_page < self.total_pages)
 
     def _populate_table(self, measurements: list[dict[str, Any]]):
-        """Clears and refills the table with new data smoothly."""
-        
-        # 1. UI-Updates für die Tabelle einfrieren (Verhindert Warnungen und Flackern)
+        """Freezes updates while repopulating so the table doesn't flicker."""
         self.table.setUpdatesEnabled(False)
-        
         try:
             self.table.clearContents()
             self.table.setRowCount(len(measurements))
 
             for row_idx, record in enumerate(measurements):
-                for col_idx, key in enumerate(self.headers):
-                    value = record.get(key, "")
-
-                    # Format floating point numbers nicely
-                    if key == "Layer" and isinstance(value, float):
-                        item = QTableWidgetItem(f"{value:.2f}")
-                    elif key == "Wavelength" and isinstance(value, float):
-                        item = QTableWidgetItem(f"{value:.3f}")
-                    else:
-                        item = QTableWidgetItem(str(value))
-
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                for col_idx, db_key in self._COL_DB_KEY.items():
+                    value = record.get(db_key) if db_key else ""
+                    item  = self._build_item(col_idx, db_key, value)
                     self.table.setItem(row_idx, col_idx, item)
         finally:
-            # 2. UI-Updates wieder aktivieren und die Tabelle 1x komplett neu zeichnen lassen
             self.table.setUpdatesEnabled(True)
+
+    def _build_item(
+        self, col_idx: int, db_key: str | None, value: Any,
+    ) -> QTableWidgetItem:
+        """Formats a single cell — floats get fixed decimals, NULL → '—'."""
+        if value is None or value == "":
+            text = "—" if db_key in (
+                "ReferenceThickness", "ThicknessCorrected",
+                "SessionTag", "Note", "Mode", "FrameCount",
+            ) else ""
+        elif db_key == "Layer" and isinstance(value, float):
+            text = f"{value:.2f}"
+        elif db_key == "ThicknessCorrected" and isinstance(value, (int, float)):
+            text = f"{float(value):.2f}"
+        elif db_key == "ReferenceThickness" and isinstance(value, (int, float)):
+            text = f"{float(value):g}"
+        elif db_key == "Wavelength" and isinstance(value, float):
+            text = f"{value:.3f}"
+        elif db_key == "Date" and isinstance(value, str):
+            text = value[:19]       # trim microseconds if present
+        else:
+            text = str(value)
+
+        item = QTableWidgetItem(text)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        return item
+
+    # ==================================================================
+    # Bulk delete
+    # ==================================================================
+
+    def _on_delete_filtered(self):
+        filters = self._get_current_filters()
+        count   = self.db_service.get_measurements_count(**filters)
+        if count == 0:
+            self._show_info_bar("No Data", "No items match the filters to delete.",
+                                is_error=True)
+            return
+
+        msg = (
+            f"You are about to permanently delete {count} measurement(s) "
+            f"matching the current filters.\n\n"
+            f"This also deletes their image files.\nAre you sure?"
+        )
+        w = MessageBox("Delete Measurements?", msg, self)
+        w.yesButton.setText("Delete"); w.cancelButton.setText("Cancel")
+        if w.exec():
+            self._perform_deletion(filters)
+
+    def _perform_deletion(self, filters: dict[str, Any]):
+        try:
+            measurements = self.db_service.get_all_filtered_measurements(**filters)
+            if not measurements:
+                self._show_info_bar("No Data", "No items found to delete.",
+                                    is_error=True)
+                return
+
+            deleted = 0
+            for record in measurements:
+                if self.db_service.delete_measurement(record["id"]):
+                    deleted += 1
+
+            self._show_info_bar("Success",
+                                f"Successfully deleted {deleted} measurement(s).",
+                                is_error=False)
+            if deleted > 0:
+                self.data_changed.emit()
+
+            self._on_filter_reset()
+        except Exception as e:
+            logger.exception("Error during bulk deletion: %s", e)
+            self._show_info_bar("Deletion Error",
+                                f"An unexpected error occurred: {e}",
+                                is_error=True)
+
+    # ==================================================================
+    # Inline editing                                         NEW in Step 8
+    # ==================================================================
+
+    # Cells the user can edit
+    _EDITABLE_COLS = frozenset({
+        _COL_REF, _COL_SESSION, _COL_NOTE,
+    })
+
+    def _on_cell_double_clicked(self, row: int, col: int) -> None:
+        if col not in self._EDITABLE_COLS:
+            return
+        self._edit_cell(row, col)
+
+    def _on_context_menu(self, pos) -> None:
+        index = self.table.indexAt(pos)
+        if not index.isValid():
+            return
+        row, col = index.row(), index.column()
+
+        menu = QMenu(self.table)
+        act_edit_ref = menu.addAction("Edit Reference Thickness…")
+        act_edit_ses = menu.addAction("Edit Session Tag…")
+        act_edit_note = menu.addAction("Edit Note…")
+        menu.addSeparator()
+        act_delete = menu.addAction("Delete this row…")
+
+        action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if action is None:
+            return
+        if action is act_edit_ref:  self._edit_cell(row, self._COL_REF)
+        if action is act_edit_ses:  self._edit_cell(row, self._COL_SESSION)
+        if action is act_edit_note: self._edit_cell(row, self._COL_NOTE)
+        if action is act_delete:    self._delete_single(row)
+
+    def _row_id(self, row: int) -> int | None:
+        item = self.table.item(row, self._COL_ID)
+        if item is None:
+            return None
+        try:
+            return int(item.text())
+        except ValueError:
+            return None
+
+    def _edit_cell(self, row: int, col: int) -> None:
+        """Opens a QInputDialog to edit one field and writes it through."""
+        row_id = self._row_id(row)
+        if row_id is None:
+            return
+        record = self.db_service.get_measurement(row_id)
+        if record is None:
+            self._show_info_bar("Error", "Row not found in database.",
+                                is_error=True)
+            return
+
+        db_key = self._COL_DB_KEY[col]
+        if db_key is None:
+            return
+
+        current_value = record.get(db_key)
+
+        if col == self._COL_REF:
+            new_val, ok = QInputDialog.getDouble(
+                self, "Edit Reference Thickness",
+                "Reference thickness (nm).  Enter 0 or leave blank to clear:",
+                value   = float(current_value) if current_value is not None else 0.0,
+                min     = 0.0,
+                max     = 5000.0,
+                decimals = 2,
+            )
+            if not ok:
+                return
+            new_db_value: Any = None if new_val <= 0 else float(new_val)
+            column_to_update  = "ReferenceThickness"
+        elif col == self._COL_SESSION:
+            new_val, ok = QInputDialog.getText(
+                self, "Edit Session Tag",
+                "Session tag (leave empty to clear):",
+                text=str(current_value or ""),
+            )
+            if not ok:
+                return
+            new_db_value = new_val.strip() or None
+            column_to_update = "SessionTag"
+        elif col == self._COL_NOTE:
+            new_val, ok = QInputDialog.getText(
+                self, "Edit Note", "Note:",
+                text=str(current_value or ""),
+            )
+            if not ok:
+                return
+            new_db_value = new_val or None
+            column_to_update = "Note"
+        else:
+            return
+
+        if self._update_single_field(row_id, column_to_update, new_db_value):
+            self._refresh_data()
+            self.data_changed.emit()
+        else:
+            self._show_info_bar("Update failed",
+                                "Could not write change to database.",
+                                is_error=True)
+
+    def _update_single_field(
+        self, row_id: int, column: str, value: Any,
+    ) -> bool:
+        """
+        Runs a direct UPDATE on the measurements table.
+
+        The column name is whitelisted (only reached via the branches in
+        `_edit_cell`) so a plain f-string is safe here — we'd otherwise
+        have to add a dedicated setter to DatabaseService for each field.
+        """
+        allowed = {"ReferenceThickness", "SessionTag", "Note"}
+        if column not in allowed:
+            logger.error("Rejected update to column %s", column)
+            return False
+        try:
+            self.db_service.cursor.execute(
+                f"UPDATE measurements SET {column} = ? WHERE id = ?",
+                (value, row_id),
+            )
+            self.db_service.conn.commit()
+            return self.db_service.cursor.rowcount > 0
+        except Exception as e:
+            logger.exception("Update failed: %s", e)
+            return False
+
+    def _delete_single(self, row: int) -> None:
+        row_id = self._row_id(row)
+        if row_id is None:
+            return
+
+        w = MessageBox(
+            "Delete this row?",
+            f"Permanently delete measurement #{row_id} "
+            f"(and its image files)?",
+            self,
+        )
+        w.yesButton.setText("Delete"); w.cancelButton.setText("Cancel")
+        if not w.exec():
+            return
+
+        if self.db_service.delete_measurement(row_id):
+            self._show_info_bar("Deleted", f"Measurement #{row_id} removed.")
+            self._refresh_data()
+            self.data_changed.emit()
+        else:
+            self._show_info_bar("Error", "Could not delete that row.",
+                                is_error=True)
+
+    # ==================================================================
+    # Helpers
+    # ==================================================================
+
+    def _show_info_bar(self, title: str, content: str, is_error: bool = False):
+        if is_error:
+            InfoBar.error(title=title, content=content, duration=5000,
+                          parent=self, position=InfoBarPosition.TOP)
+        else:
+            InfoBar.success(title=title, content=content, duration=3000,
+                            parent=self, position=InfoBarPosition.TOP)
