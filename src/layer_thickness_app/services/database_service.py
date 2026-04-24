@@ -1,60 +1,36 @@
-import sqlite3
+from __future__ import annotations
+
 import os
+import sqlite3
 import logging
-from typing import Any
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# All columns on the measurements table that are safe to use in ORDER BY /
-# filter clauses.  Keep this in sync with the schema.
+# Columns on the measurements table that are safe to use in ORDER BY /
+# filter clauses and that the import/export services may ship across ZIP.
 VALID_COLUMNS = frozenset({
-    'id', 'Date', 'Name', 'Layer', 'Wavelength',
-    'Shelf', 'Book', 'Page', 'Note',
-    'FrameCount', 'Mode', 'ThicknessCorrected',
-    'ReferenceThickness', 'SessionTag',
-    'MeanGrayRef', 'MeanGraySample',
-    'StdGrayRef', 'StdGraySample',
+    "id", "Date", "Name", "Layer", "Wavelength",
+    "RefImage", "MatImage", "Shelf", "Book", "Page", "Note",
+    "Mode", "ThicknessCorrected",
+    "ReferenceThickness", "SessionTag",
+    "MeanGrayRef", "MeanGraySample",
+    "StdGrayRef", "StdGraySample",
+    "FrameCountRef", "FrameCountSample",
+    "Probe", "RunIndex",
 })
 
-# All columns on the calibrations table.
 VALID_CAL_COLUMNS = frozenset({
-    'id', 'Date', 'Name', 'Shelf', 'Book', 'Page',
-    'Wavelength', 'Mode', 'Slope', 'Intercept', 'RSquared',
-    'NSamples', 'MinRefNm', 'MaxRefNm', 'SessionTag',
-    'IsActive', 'Note',
+    "id", "Date", "Name", "Shelf", "Book", "Page",
+    "Wavelength", "Mode", "Slope", "Intercept", "RSquared",
+    "NSamples", "MinRefNm", "MaxRefNm", "SessionTag",
+    "IsActive", "Note",
 })
 
 
 class DatabaseService:
-    """
-    Manages all database operations for storing and retrieving measurements
-    and calibration models using a local SQLite3 database.
-
-    Schema history
-    --------------
-    v1  (Burkhardt)     : measurements table (id, Date, Name, Layer,
-                          RefImage, MatImage, Shelf, Book, Page)
-    v2  (Klager BA1)    : + Wavelength, Note
-    v3  (Klager BA2 §1) : + FrameCount, Mode, ThicknessCorrected,
-                            ReferenceThickness, SessionTag,
-                            MeanGrayRef, MeanGraySample,
-                            StdGrayRef, StdGraySample
-                          + performance indexes
-    v4  (Klager BA2 §5) : + calibrations table
-    """
-
-    _V3_COLUMNS: list[tuple[str, str]] = [
-        ("FrameCount",         "INTEGER DEFAULT 1"),
-        ("Mode",               "TEXT    DEFAULT 'single'"),
-        ("ThicknessCorrected", "REAL"),
-        ("ReferenceThickness", "REAL"),
-        ("SessionTag",         "TEXT"),
-        ("MeanGrayRef",        "REAL"),
-        ("MeanGraySample",     "REAL"),
-        ("StdGrayRef",         "REAL"),
-        ("StdGraySample",      "REAL"),
-    ]
+    """Persists measurements and calibration models in a local SQLite DB."""
 
     def __init__(self, db_path: str):
         try:
@@ -71,8 +47,7 @@ class DatabaseService:
             self.cursor = self.conn.cursor()
 
             self._create_measurements_table()
-            self._create_calibrations_table()      # NEW in v4
-            self._migrate_measurements_table()
+            self._create_calibrations_table()
             self._create_indexes()
         except (sqlite3.Error, OSError) as e:
             logger.error("Database connection/setup error at %s: %s", db_path, e)
@@ -83,19 +58,32 @@ class DatabaseService:
     # ==================================================================
 
     def _create_measurements_table(self):
+        """Final v5 schema, declared directly — no migration path."""
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS measurements (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                Date        TIMESTAMP DEFAULT (DATETIME('now', 'localtime')),
-                Name        TEXT,
-                Layer       REAL NOT NULL,
-                Wavelength  REAL,
-                RefImage    TEXT NOT NULL,
-                MatImage    TEXT NOT NULL,
-                Shelf       TEXT NOT NULL,
-                Book        TEXT NOT NULL,
-                Page        TEXT NOT NULL,
-                Note        TEXT
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                Date               TIMESTAMP DEFAULT (DATETIME('now', 'localtime')),
+                Name               TEXT,
+                Layer              REAL NOT NULL,
+                Wavelength         REAL,
+                RefImage           TEXT NOT NULL,
+                MatImage           TEXT NOT NULL,
+                Shelf              TEXT NOT NULL,
+                Book               TEXT NOT NULL,
+                Page               TEXT NOT NULL,
+                Note               TEXT,
+                Mode               TEXT    DEFAULT 'single',
+                ThicknessCorrected REAL,
+                ReferenceThickness REAL,
+                SessionTag         TEXT,
+                MeanGrayRef        REAL,
+                MeanGraySample     REAL,
+                StdGrayRef         REAL,
+                StdGraySample      REAL,
+                FrameCountRef      INTEGER,
+                FrameCountSample   INTEGER,
+                Probe              TEXT,
+                RunIndex           INTEGER
             )
         """)
         self.conn.commit()
@@ -103,10 +91,8 @@ class DatabaseService:
     def _create_calibrations_table(self):
         """
         Stores fitted linear regression correction models.
-
-        One row per fit.  For a given (Shelf, Book, Page, Wavelength, Mode)
-        combination only a single row may have IsActive=1.  Applied to raw
-        Lambert-Beer output as:  corrected = Slope * raw + Intercept.
+        One row per fit. For a given (Shelf, Book, Page, Wavelength, Mode)
+        combination only a single row may have IsActive=1.
         """
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS calibrations (
@@ -131,22 +117,6 @@ class DatabaseService:
         """)
         self.conn.commit()
 
-    def _migrate_measurements_table(self):
-        """Idempotent migration for the measurements table."""
-        try:
-            self.cursor.execute("PRAGMA table_info(measurements)")
-            existing = {col["name"] for col in self.cursor.fetchall()}
-            v2 = [("Wavelength", "REAL"), ("Note", "TEXT")]
-            for col_name, col_def in v2 + self._V3_COLUMNS:
-                if col_name not in existing:
-                    logger.info("Migration: adding column '%s' to measurements.", col_name)
-                    self.cursor.execute(
-                        f"ALTER TABLE measurements ADD COLUMN {col_name} {col_def}"
-                    )
-            self.conn.commit()
-        except sqlite3.Error as e:
-            logger.error("Error during measurements migration: %s", e)
-
     def _create_indexes(self):
         indexes = [
             ("idx_meas_date",    "measurements(Date DESC)"),
@@ -156,7 +126,7 @@ class DatabaseService:
             ("idx_meas_page",    "measurements(Page)"),
             ("idx_meas_session", "measurements(SessionTag)"),
             ("idx_meas_mode",    "measurements(Mode)"),
-            # NEW in v4
+            ("idx_meas_probe",   "measurements(Probe)"),
             ("idx_cal_material", "calibrations(Shelf, Book, Page, Wavelength, Mode)"),
             ("idx_cal_active",   "calibrations(IsActive)"),
             ("idx_cal_session",  "calibrations(SessionTag)"),
@@ -171,7 +141,7 @@ class DatabaseService:
             logger.error("Error creating indexes: %s", e)
 
     # ==================================================================
-    # Measurements – write
+    # Measurements — write
     # ==================================================================
 
     def save_measurement(self, data: dict[str, Any]) -> int:
@@ -192,21 +162,6 @@ class DatabaseService:
         except sqlite3.Error as e:
             logger.error("Error saving measurement: %s", e)
             return -1
-
-    def update_corrected_thickness(
-        self, measurement_id: int, thickness_corrected: float
-    ) -> bool:
-        try:
-            self.cursor.execute(
-                "UPDATE measurements SET ThicknessCorrected = ? WHERE id = ?",
-                (thickness_corrected, measurement_id),
-            )
-            self.conn.commit()
-            return self.cursor.rowcount > 0
-        except sqlite3.Error as e:
-            logger.error("Error updating corrected thickness for id %s: %s",
-                         measurement_id, e)
-            return False
 
     def delete_measurement(self, measurement_id: int) -> bool:
         try:
@@ -229,7 +184,7 @@ class DatabaseService:
             return False
 
     # ==================================================================
-    # Measurements – read (single)
+    # Measurements — read (single)
     # ==================================================================
 
     def get_measurement(self, measurement_id: int) -> dict[str, Any] | None:
@@ -244,7 +199,7 @@ class DatabaseService:
             return None
 
     # ==================================================================
-    # Measurements – read (filtered / paginated)
+    # Measurements — read (filtered / paginated)
     # ==================================================================
 
     def _build_filter_query(
@@ -259,12 +214,12 @@ class DatabaseService:
         note_filter: str | None = None,
         session_tag: str | None = None,
         mode_filter: str | None = None,
+        probe:       str | None = None,
     ) -> tuple[str, dict[str, Any]]:
-
         where_clauses: list[str] = []
         params: dict[str, Any]  = {}
         if name_filter:
-            where_clauses.append("Name = :name");             params["name"] = name_filter
+            where_clauses.append("Name = :name");              params["name"] = name_filter
         if start_date:
             where_clauses.append("DATE(Date) >= :start_date"); params["start_date"] = start_date
         if end_date:
@@ -281,6 +236,8 @@ class DatabaseService:
             where_clauses.append("SessionTag = :session_tag"); params["session_tag"] = session_tag
         if mode_filter:
             where_clauses.append("Mode = :mode_filter");       params["mode_filter"] = mode_filter
+        if probe:
+            where_clauses.append("Probe = :probe");            params["probe"] = probe
 
         query = base_query
         if where_clauses:
@@ -293,17 +250,23 @@ class DatabaseService:
         end_date:    str | None = None, shelf: str | None = None,
         book:        str | None = None, page: str | None = None,
         note_filter: str | None = None, session_tag: str | None = None,
-        mode_filter: str | None = None,
+        mode_filter: str | None = None, probe: str | None = None,
         page_num:    int = 1, per_page: int = 20,
         order_by:    str = "Date", order_dir: str = "DESC",
-    ) -> list[dict[str, Any]]:
-        query, params = self._build_filter_query(
-            "SELECT * FROM measurements",
-            name_filter, start_date, end_date, shelf, book, page,
-            note_filter, session_tag, mode_filter,
-        )
+    ) -> tuple[list[dict[str, Any]], int]:
+        """
+        Returns (rows, total_count). Combines count and page-of-rows
+        into a single SELECT using SQLite's window functions so the page
+        view only makes one round-trip to the DB.
+        """
         safe_order_by  = order_by  if order_by  in VALID_COLUMNS else "Date"
         safe_order_dir = order_dir if order_dir in ("ASC", "DESC") else "DESC"
+        base = "SELECT *, COUNT(*) OVER() AS __total FROM measurements"
+
+        query, params = self._build_filter_query(
+            base, name_filter, start_date, end_date, shelf, book, page,
+            note_filter, session_tag, mode_filter, probe,
+        )
         query += f" ORDER BY {safe_order_by} {safe_order_dir}"
         if safe_order_by != "id":
             query += ", id DESC"
@@ -311,12 +274,24 @@ class DatabaseService:
         query += " LIMIT :limit OFFSET :offset"
         params["limit"]  = per_page
         params["offset"] = offset
+
         try:
             self.cursor.execute(query, params)
-            return [dict(r) for r in self.cursor.fetchall()]
+            rows = [dict(r) for r in self.cursor.fetchall()]
+            total = int(rows[0]["__total"]) if rows else 0
+            for r in rows:
+                r.pop("__total", None)
+            if total == 0:
+                # Rows came back empty but there may still be data on
+                # earlier pages; fall back to a dedicated COUNT.
+                total = self.get_measurements_count(
+                    name_filter, start_date, end_date, shelf, book, page,
+                    note_filter, session_tag, mode_filter, probe,
+                )
+            return rows, total
         except sqlite3.Error as e:
             logger.error("Error fetching measurements: %s", e)
-            return []
+            return [], 0
 
     def get_all_filtered_measurements(
         self,
@@ -324,13 +299,13 @@ class DatabaseService:
         end_date:    str | None = None, shelf: str | None = None,
         book:        str | None = None, page: str | None = None,
         note_filter: str | None = None, session_tag: str | None = None,
-        mode_filter: str | None = None,
+        mode_filter: str | None = None, probe: str | None = None,
         order_by:    str = "Date", order_dir: str = "DESC",
     ) -> list[dict[str, Any]]:
         query, params = self._build_filter_query(
             "SELECT * FROM measurements",
             name_filter, start_date, end_date, shelf, book, page,
-            note_filter, session_tag, mode_filter,
+            note_filter, session_tag, mode_filter, probe,
         )
         safe_order_by  = order_by  if order_by  in VALID_COLUMNS else "Date"
         safe_order_dir = order_dir if order_dir in ("ASC", "DESC") else "DESC"
@@ -350,12 +325,12 @@ class DatabaseService:
         end_date:    str | None = None, shelf: str | None = None,
         book:        str | None = None, page: str | None = None,
         note_filter: str | None = None, session_tag: str | None = None,
-        mode_filter: str | None = None,
+        mode_filter: str | None = None, probe: str | None = None,
     ) -> int:
         query, params = self._build_filter_query(
             "SELECT COUNT(*) FROM measurements",
             name_filter, start_date, end_date, shelf, book, page,
-            note_filter, session_tag, mode_filter,
+            note_filter, session_tag, mode_filter, probe,
         )
         try:
             self.cursor.execute(query, params)
@@ -365,19 +340,18 @@ class DatabaseService:
             return 0
 
     # ==================================================================
-    # Measurements – BA2 specific queries
+    # Measurements — campaign queries
     # ==================================================================
 
     def get_calibration_rows(
-        self, book: str, page: str, session_tag: str | None = None,
+        self, book: str, page: str,
+        session_tag: str | None = None, probe: str | None = None,
     ) -> list[dict[str, Any]]:
-        """
-        Returns measurements with a known ReferenceThickness — the
-        calibration training / test pool for a given material.
-        """
+        """Rows with a known ReferenceThickness — the calibration pool."""
         query = """
             SELECT id, Layer, ThicknessCorrected, ReferenceThickness,
-                   Mode, FrameCount, SessionTag, Date, Wavelength
+                   Mode, FrameCountRef, FrameCountSample,
+                   SessionTag, Probe, RunIndex, Date, Wavelength
             FROM measurements
             WHERE Book = :book
               AND Page = :page
@@ -387,6 +361,9 @@ class DatabaseService:
         if session_tag:
             query += " AND SessionTag = :session_tag"
             params["session_tag"] = session_tag
+        if probe:
+            query += " AND Probe = :probe"
+            params["probe"] = probe
         query += " ORDER BY ReferenceThickness ASC, Date ASC"
         try:
             self.cursor.execute(query, params)
@@ -408,15 +385,14 @@ class DatabaseService:
 
     def get_msa_rows(
         self, book: str, page: str, reference_nm: float,
-        session_tag: str | None = None, tolerance: float = 0.5,
+        session_tag: str | None = None, probe: str | None = None,
+        tolerance: float = 0.5,
     ) -> list[dict[str, Any]]:
-        """
-        Returns the repeated-measurement series for one reference sample.
-        Used as input for MSA Typ 1.
-        """
+        """Repeated-measurement series for one reference sample."""
         query = """
             SELECT id, Layer, ThicknessCorrected, ReferenceThickness,
-                   Mode, FrameCount, SessionTag, Date
+                   Mode, FrameCountRef, FrameCountSample,
+                   SessionTag, Probe, RunIndex, Date
             FROM measurements
             WHERE Book = :book
               AND Page = :page
@@ -430,6 +406,9 @@ class DatabaseService:
         if session_tag:
             query += " AND SessionTag = :session_tag"
             params["session_tag"] = session_tag
+        if probe:
+            query += " AND Probe = :probe"
+            params["probe"] = probe
         query += " ORDER BY Date ASC"
         try:
             self.cursor.execute(query, params)
@@ -439,14 +418,10 @@ class DatabaseService:
             return []
 
     # ==================================================================
-    # Calibrations – write / read / activate                   NEW in v4
+    # Calibrations — write / read / activate
     # ==================================================================
 
     def save_calibration(self, data: dict[str, Any]) -> int:
-        """
-        Inserts a fitted calibration model.  Unknown keys are silently
-        dropped.  Returns the new row id or -1 on failure.
-        """
         if not data:
             logger.error("No data provided to save_calibration.")
             return -1
@@ -482,9 +457,6 @@ class DatabaseService:
         mode:        str | None = None, session_tag: str | None = None,
         active_only: bool = False,
     ) -> list[dict[str, Any]]:
-        """
-        Lists calibrations with optional filters.  Most recent first.
-        """
         where_clauses: list[str] = []
         params: dict[str, Any]  = {}
         if shelf:       where_clauses.append("Shelf = :shelf");            params["shelf"] = shelf
@@ -523,7 +495,6 @@ class DatabaseService:
         self, shelf: str, book: str, page: str,
         wavelength_um: float, mode: str,
     ) -> dict[str, Any] | None:
-        """Returns the single active calibration for a material/mode, if any."""
         try:
             self.cursor.execute(
                 """
@@ -542,9 +513,8 @@ class DatabaseService:
 
     def set_active_calibration(self, calibration_id: int) -> bool:
         """
-        Marks the given calibration as active.  Atomically deactivates
-        any other calibrations with the same (Shelf, Book, Page,
-        Wavelength, Mode) so at most one is active per material/mode.
+        Marks the given calibration as active. Atomically deactivates
+        any other calibrations sharing (Shelf, Book, Page, Wavelength, Mode).
         """
         try:
             self.cursor.execute(
@@ -614,6 +584,7 @@ class DatabaseService:
     def get_unique_pages(self)    -> list[str]: return self._get_unique_column_values("Page")
     def get_unique_notes(self)    -> list[str]: return self._get_unique_column_values("Note")
     def get_unique_sessions(self) -> list[str]: return self._get_unique_column_values("SessionTag")
+    def get_unique_probes(self)   -> list[str]: return self._get_unique_column_values("Probe")
 
     # ==================================================================
     # Housekeeping

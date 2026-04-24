@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import math
 import logging
-import cv2
+from typing import Any, TYPE_CHECKING
+
 import numpy as np
 import refractiveindex2 as ri
-from typing import Any, TYPE_CHECKING
 
 from layer_thickness_app.services.plausibility_service import (
     PlausibilityService,
@@ -13,8 +13,6 @@ from layer_thickness_app.services.plausibility_service import (
 )
 
 if TYPE_CHECKING:
-    # Imported only for type-checker — avoids any circular import risk at
-    # runtime while still giving full autocomplete / mypy support.
     from layer_thickness_app.services.camera_service import FrameCaptureResult
 
 logger = logging.getLogger(__name__)
@@ -25,46 +23,27 @@ class CalculationService:
     Converts camera captures into a layer thickness value via the
     Beer-Lambert law, with integrated plausibility checks.
 
-    Two public entry points
-    -----------------------
-    calculate_thickness_from_captures()   – NEW main path (Step 2+).
-        Accepts two FrameCaptureResult objects whose gray_mean values
-        have already been computed by the multi-frame averaging logic.
-        Runs the plausibility gate FIRST and aborts early on hard errors.
-        Returns (thickness_nm | None, error_msg | None, capture_stats: dict).
-        capture_stats contains:
-          - DB-bound keys (MeanGrayRef, Mode, FrameCount, …) consumed by
-            database_service.save_measurement.  Unknown keys are silently
-            dropped there, so the extra plausibility keys are harmless.
-          - Transient keys used by the UI:
-              plausibility_ok        : bool
-              plausibility_severity  : 'ok' | 'warning' | 'error'
-              plausibility_code      : machine-readable code
-              plausibility_title     : short title
-              plausibility_message   : actionable description
-
-    calculate_thickness()                 – ORIGINAL backward-compat path.
-        Accepts raw BGR numpy arrays (as before).  Internally wraps the
-        new method.  Plausibility checks still run; errors surface via
-        the returned error_msg so no existing caller is silently bypassed.
-        Returns the original 2-tuple: (thickness_nm | None, error_msg | None).
+    Entry point
+    -----------
+    calculate_thickness_from_captures() — accepts two FrameCaptureResult
+    objects whose gray_mean values have already been computed by the
+    multi-frame averaging logic. Runs the plausibility gate FIRST and
+    aborts early on hard errors. Returns
+    (thickness_nm | None, error_msg | None, capture_stats: dict).
     """
 
-    # ------------------------------------------------------------------
-    # Linearisation constants (sRGB gamma approximation used by the
-    # original Burkhardt implementation — do NOT change without re-running
-    # the full calibration).
-    # ------------------------------------------------------------------
+    # Linearisation constants (sRGB gamma approximation).
+    # Do not change without re-running the full calibration.
     LINEARIZATION_OFFSET_1 = 0.055
     LINEARIZATION_OFFSET_2 = 1.005
     LINEARIZATION_EXPONENT = 2.4
 
     def __init__(self, plausibility_service: PlausibilityService | None = None):
         """
-        The plausibility service is dependency-injected so callers can
-        supply a pre-configured instance (e.g. with custom thresholds
-        for a different sensor).  When omitted, a default instance with
-        the BA1 §4.2.3 thresholds is used.
+        The plausibility service is dependency-injected so the controller
+        can swap in a short-lived profile-bound instance for one
+        calculation and keep its own long-lived default service for
+        post-capture feedback.
         """
         self.plausibility: PlausibilityService = (
             plausibility_service if plausibility_service is not None
@@ -72,7 +51,7 @@ class CalculationService:
         )
 
     # ==================================================================
-    # NEW MAIN PATH  (Step 2+)
+    # Main path
     # ==================================================================
 
     def calculate_thickness_from_captures(
@@ -87,16 +66,28 @@ class CalculationService:
         """
         Full calculation pipeline operating on FrameCaptureResult objects.
 
-        Execution order
-        ---------------
-        1.  Build capture_stats (always populated, even on early exit).
-        2.  Plausibility gate — hard errors abort here with a clear
-            user-facing message.
-        3.  Material lookup (k).
-        4.  Absorption coefficient (α).
-        5.  Linearisation.
-        6.  Beer-Lambert → thickness in nm.
+        Order of operations
+        -------------------
+        1. Frame-count consistency check (reference and sample must have
+           been captured with the same n_frames, otherwise their noise
+           characteristics differ and comparing them is invalid).
+        2. Build capture_stats (always populated, even on early exit).
+        3. Plausibility gate — hard errors abort here.
+        4. Material lookup (k).
+        5. Absorption coefficient (α).
+        6. Linearisation.
+        7. Beer-Lambert → thickness in nm.
         """
+        # ── 1. Frame-count consistency ───────────────────────────────
+        if ref_result.frame_count != mat_result.frame_count:
+            error_msg = (
+                f"Frame count mismatch: reference={ref_result.frame_count}, "
+                f"sample={mat_result.frame_count} — capture both with the "
+                f"same frame count."
+            )
+            logger.error(error_msg)
+            return None, error_msg, {}
+
         material_path = f"{shelf}/{book}/{page}"
         logger.info(
             "calculate_thickness_from_captures | material=%s | λ=%.4f µm | "
@@ -106,19 +97,20 @@ class CalculationService:
             mat_result.gray_mean, mat_result.gray_std, mat_result.frames_used,
         )
 
-        # ── 1. Capture stats (returned even on early failure) ─────────
-        frame_count = max(ref_result.frame_count, mat_result.frame_count)
+        # ── 2. Capture stats (returned even on early failure) ────────
+        frame_count = ref_result.frame_count  # == mat_result.frame_count
         capture_stats: dict[str, Any] = {
             # DB-bound keys — consumed by save_measurement
-            "MeanGrayRef":    round(ref_result.gray_mean, 4),
-            "MeanGraySample": round(mat_result.gray_mean, 4),
-            "StdGrayRef":     round(ref_result.gray_std,  4),
-            "StdGraySample":  round(mat_result.gray_std,  4),
-            "FrameCount":     frame_count,
-            "Mode":           "multi" if frame_count > 1 else "single",
+            "MeanGrayRef":       round(ref_result.gray_mean, 4),
+            "MeanGraySample":    round(mat_result.gray_mean, 4),
+            "StdGrayRef":        round(ref_result.gray_std,  4),
+            "StdGraySample":     round(mat_result.gray_std,  4),
+            "FrameCountRef":     ref_result.frame_count,
+            "FrameCountSample":  mat_result.frame_count,
+            "Mode":              "multi" if frame_count > 1 else "single",
         }
 
-        # ── 2. Plausibility gate ──────────────────────────────────────
+        # ── 3. Plausibility gate ─────────────────────────────────────
         plaus = self.plausibility.check_pair(
             ref_gray_mean    = ref_result.gray_mean,
             sample_gray_mean = mat_result.gray_mean,
@@ -138,23 +130,23 @@ class CalculationService:
                 plaus.code.value, plaus.title,
             )
 
-        # ── 3. Extinction coefficient k ───────────────────────────────
+        # ── 4. Extinction coefficient k ──────────────────────────────
         k, k_error = self._get_extinction_coefficient(shelf, book, page, wavelength_um)
         if k_error:
             return None, k_error, capture_stats
 
-        # ── 4. Absorption coefficient α ───────────────────────────────
+        # ── 5. Absorption coefficient α ──────────────────────────────
         try:
             alpha_cm = self.calculate_alpha(k, wavelength_um)
             logger.info("α = %.4e cm⁻¹", alpha_cm)
         except ValueError as e:
             return None, f"Math Error: {e}", capture_stats
 
-        # ── 5. Linearise the pre-computed gray means ──────────────────
+        # ── 6. Linearise the pre-computed gray means ─────────────────
         lin_ref = self.linearize_mean_pixel_value(ref_result.gray_mean)
         lin_mat = self.linearize_mean_pixel_value(mat_result.gray_mean)
 
-        # ── 6. Beer-Lambert → thickness ───────────────────────────────
+        # ── 7. Beer-Lambert → thickness ──────────────────────────────
         thickness_nm = self.calculate_thickness_from_intensity(
             intensity_transmitted = lin_mat,
             intensity_initial     = lin_ref,
@@ -173,50 +165,14 @@ class CalculationService:
         return thickness_nm, None, capture_stats
 
     # ==================================================================
-    # ORIGINAL BACKWARD-COMPAT PATH
-    # ==================================================================
-
-    def calculate_thickness(
-        self,
-        ref_image:     np.ndarray,
-        mat_image:     np.ndarray,
-        shelf:         str,
-        book:          str,
-        page:          str,
-        wavelength_um: float,
-    ) -> tuple[float | None, str | None]:
-        """
-        Original public API — accepts raw BGR frames and returns
-        (thickness_nm, error_msg).  Plausibility checks still apply and
-        surface via error_msg, so nothing is silently bypassed.
-
-        This is still called by the controller until Step 4 migrates it
-        to the new path.
-        """
-        gw_ref = self.calculate_mean_pixel_value(ref_image, "Reference")
-        gw_mat = self.calculate_mean_pixel_value(mat_image, "Material")
-
-        ref_proxy = _SingleFrameProxy(gw_ref)
-        mat_proxy = _SingleFrameProxy(gw_mat)
-
-        thickness_nm, error_msg, _ = self.calculate_thickness_from_captures(
-            ref_proxy, mat_proxy, shelf, book, page, wavelength_um  # type: ignore[arg-type]
-        )
-        return thickness_nm, error_msg
-
-    # ==================================================================
     # Internal helpers
     # ==================================================================
 
     @staticmethod
     def _attach_plausibility(
-        stats: dict[str, Any], result: PlausibilityResult
+        stats: dict[str, Any], result: PlausibilityResult,
     ) -> None:
-        """
-        Writes the plausibility outcome into the stats dict under
-        transient (non-DB) keys so the controller can surface it in
-        the GUI without any extra plumbing.
-        """
+        """Write the plausibility outcome into transient stats keys."""
         stats["plausibility_ok"]       = result.ok
         stats["plausibility_severity"] = result.severity.value
         stats["plausibility_code"]     = result.code.value
@@ -230,10 +186,6 @@ class CalculationService:
         page:          str,
         wavelength_um: float,
     ) -> tuple[float | None, str | None]:
-        """
-        Fetches k from the refractiveindex2 database.
-        Returns (k, None) on success or (None, error_msg) on failure.
-        """
         material_path = f"{shelf}/{book}/{page}"
         try:
             material = ri.RefractiveIndexMaterial(shelf, book, page)
@@ -248,27 +200,10 @@ class CalculationService:
             logger.error(msg)
             return None, msg
 
-    def calculate_mean_pixel_value(
-        self, image: np.ndarray, image_type: str
-    ) -> float:
-        """
-        Converts a BGR frame to grayscale and returns the mean pixel value.
-        Used by the backward-compat calculate_thickness() path and may be
-        called independently for diagnostics.
-        """
-        gray  = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        value = float(np.mean(gray))
-        logger.info("Mean gray (%s): %.4f", image_type, value)
-        return value
-
     def linearize_mean_pixel_value(self, gw: float) -> float:
         """
-        Applies the sRGB gamma linearisation to a 0–255 gray value.
-
-        Formula:
-            gw_norm      = gw / 255
-            gw_norm_lin  = ((gw_norm + O1) / O2) ^ E
-        where O1, O2, E are the class-level linearisation constants.
+        sRGB gamma linearisation of a 0-255 gray value:
+            gw_norm_lin = ((gw / 255 + O1) / O2) ** E
         """
         gw_norm_lin = (
             ((gw / 255.0) + self.LINEARIZATION_OFFSET_1)
@@ -284,10 +219,8 @@ class CalculationService:
         alpha:                 float,
     ) -> float | None:
         """
-        Beer-Lambert law:  I = I₀ · e^(−α·d)
-        Solved for d:      d = −ln(I / I₀) / α
-
-        Returns thickness in nm, or None if the inputs are unphysical.
+        Beer-Lambert:  I = I₀ · e^(−α·d)   →   d = −ln(I / I₀) / α
+        Returns thickness in nm, or None if inputs are unphysical.
         """
         if intensity_transmitted <= 0 or intensity_initial <= 0 or alpha == 0:
             logger.error(
@@ -305,33 +238,8 @@ class CalculationService:
             return None
 
     def calculate_alpha(self, k: float, lambda_um: float) -> float:
-        """
-        Absorption coefficient α [cm⁻¹].
-
-            α = 4π·k / λ
-
-        Parameters
-        ----------
-        k         : extinction coefficient (dimensionless)
-        lambda_um : wavelength in µm
-        """
+        """Absorption coefficient α [cm⁻¹]:  α = 4π·k / λ"""
         if lambda_um <= 0:
             raise ValueError("Wavelength must be > 0.")
-        lambda_cm = lambda_um * 1e-4   # µm → cm
+        lambda_cm = lambda_um * 1e-4
         return (4.0 * math.pi * k) / lambda_cm
-
-
-# ---------------------------------------------------------------------------
-# Internal duck-type proxy used only by calculate_thickness() to avoid
-# importing FrameCaptureResult at runtime while sharing the same calculation
-# core.  Not part of the public API.
-# ---------------------------------------------------------------------------
-class _SingleFrameProxy:
-    """Minimal stand-in for FrameCaptureResult with single-frame semantics."""
-    __slots__ = ("gray_mean", "gray_std", "frame_count", "frames_used")
-
-    def __init__(self, gray_mean: float):
-        self.gray_mean   = gray_mean
-        self.gray_std    = 0.0
-        self.frame_count = 1
-        self.frames_used = 1

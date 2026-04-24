@@ -1,28 +1,14 @@
 """
 Measurement System Analysis — Type 1 (Gage Study).
 
-Implements the MSA Typ 1 methodology used as the 
-quantitative gate for declaring the measurement
-system "capable" before and after calibration.
-
 Two capability indices are computed:
 
-    Cg   =  (K / 100 · Tol)          /  (L · s)        = 0.2 · Tol / (6 · s)
-    Cgk  =  ((K / 200) · Tol − |x̄ − xₘ|) / ((L/2) · s) = (0.1 · Tol − bias) / (3 · s)
+    Cg   = (K/100 · Tol)          / (L · s)       = 0.2 · Tol / (6 · s)
+    Cgk  = ((K/200) · Tol − |x̄ − xₘ|) / ((L/2) · s) = (0.1·Tol − bias) / (3·s)
 
 with the Minitab defaults K = 20, L = 6.
 
-Interpretation
---------------
-Cg  answers: "How *precise* is the system?"  (ignores bias, purely scatter
-            vs. tolerance)
-Cgk answers: "How precise **and accurate** is the system?"  (penalises
-            the offset of the mean from the reference value)
-
-A system is considered capable when **both** Cg and Cgk ≥ 1.33.  For a
-well-calibrated system Cg ≈ Cgk (mean sits on reference).
-
-This service is pure numpy — no DB access, no GUI, fully unit-testable.
+A system is considered capable when Cg and Cgk are both ≥ 1.33.
 """
 
 from __future__ import annotations
@@ -37,36 +23,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MSAReport:
-    """
-    Immutable Type-1 gage-study report.
-
-    Attributes
-    ----------
-    material
-        Free-form label for identification in UI / CSV export
-        (e.g. "Cu @ 635 nm (multi, corrected)").
-    reference_thickness
-        The reference (true) thickness xₘ of the test sample, in nm.
-    tolerance
-        Total tolerance band Tol for the part being measured, in nm.
-        e.g. for a "±65 nm" specification, pass tolerance=130.
-    n
-        Number of repeated measurements included in the study.
-    mean, std
-        Sample mean x̄ and sample standard deviation s (ddof=1).
-    bias
-        |x̄ − xₘ|, the magnitude of systematic deviation.
-    cg, cgk
-        Capability indices (see module docstring).
-    capable_threshold
-        Threshold above which Cg and Cgk are considered capable (default
-        1.33 per Minitab / industry convention).
-    cg_capable, cgk_capable, is_capable
-        Boolean flags for quick UI rendering.
-    K, L
-        The formula parameters used (stored so a report can be
-        reproduced exactly).
-    """
     material:            str
     reference_thickness: float
     tolerance:           float
@@ -83,10 +39,6 @@ class MSAReport:
     K:                   int
     L:                   int
 
-    # ------------------------------------------------------------------
-    # Rendering helpers (used by the validation page and CSV export)
-    # ------------------------------------------------------------------
-
     def summary(self) -> str:
         status = "CAPABLE ✓" if self.is_capable else "NOT CAPABLE ✗"
         return (
@@ -98,39 +50,19 @@ class MSAReport:
         )
 
     def to_dict(self) -> dict:
-        """JSON/CSV-friendly representation."""
         return asdict(self)
 
 
 class MSAService:
-    """
-    Computes MSA Typ 1 capability indices.
+    """Computes MSA Typ 1 capability indices. Stateless."""
 
-    The service is stateless — every call to :meth:`compute` produces
-    an independent :class:`MSAReport`.
-
-    Usage
-    -----
-    >>> svc = MSAService()
-    >>> report = svc.compute(
-    ...     measurements        = [29.8, 30.1, 30.2, …],
-    ...     reference_thickness = 30.0,
-    ...     tolerance           = 130.0,     # ±65 nm
-    ...     material            = "Cu, 30 nm, multi, raw",
-    ... )
-    >>> report.summary()
-
-    For before/after calibration comparisons use :meth:`compare`.
-    """
-
-    # Minitab defaults, also used in BA1/BA2.
-    K_DEFAULT:                 int   = 20     # % of Tol reserved for scatter
-    L_DEFAULT:                 int   = 6      # σ-multiplier (6σ ≈ 99.73 %)
+    K_DEFAULT:                 int   = 20
+    L_DEFAULT:                 int   = 6
     CAPABLE_THRESHOLD_DEFAULT: float = 1.33
 
-    # Minimum number of repeated measurements required for a meaningful
-    # Type-1 study (Minitab and ISO 22514-7 both recommend ≥25).
-    MIN_N = 10
+    # Minimum repeated measurements for a meaningful Type-1 study —
+    # Minitab and ISO 22514-7 both recommend 25.
+    MIN_N = 25
 
     def __init__(
         self,
@@ -142,10 +74,6 @@ class MSAService:
         self.L                 = self.L_DEFAULT                 if L                 is None else L
         self.capable_threshold = self.CAPABLE_THRESHOLD_DEFAULT if capable_threshold is None else capable_threshold
 
-    # ==================================================================
-    # Single study
-    # ==================================================================
-
     def compute(
         self,
         measurements:        list[float] | np.ndarray,
@@ -153,16 +81,6 @@ class MSAService:
         tolerance:           float,
         material:            str = "",
     ) -> MSAReport:
-        """
-        Runs one Type-1 study on *measurements* repeated at
-        *reference_thickness* and produces a report.
-
-        Raises
-        ------
-        ValueError
-            If fewer than :attr:`MIN_N` measurements are supplied or if
-            the tolerance is non-positive.
-        """
         x = np.asarray(measurements, dtype=np.float64)
         if x.size < self.MIN_N:
             raise ValueError(
@@ -177,9 +95,7 @@ class MSAService:
         std   = float(x.std(ddof=1)) if n > 1 else 0.0
         bias  = abs(mean - reference_thickness)
 
-        cg, cgk = self._capability_indices(
-            std=std, bias=bias, tolerance=tolerance,
-        )
+        cg, cgk = self._capability_indices(std=std, bias=bias, tolerance=tolerance)
 
         cg_capable  = cg  >= self.capable_threshold
         cgk_capable = cgk >= self.capable_threshold
@@ -204,10 +120,6 @@ class MSAService:
         logger.info(report.summary().replace("\n", " | "))
         return report
 
-    # ==================================================================
-    # Before / after comparison
-    # ==================================================================
-
     def compare(
         self,
         raw:                 list[float] | np.ndarray,
@@ -216,26 +128,13 @@ class MSAService:
         tolerance:           float,
         material:            str = "",
     ) -> dict[str, MSAReport]:
-        """
-        Runs MSA Typ 1 twice — once on the raw Lambert-Beer output and
-        once on the calibration-corrected values — and returns both
-        reports in a dict.
-
-        This is the core numeric output of the BA2 validation page.
-
-        Returns
-        -------
-        {'raw': MSAReport, 'corrected': MSAReport}
-        """
         raw_arr = np.asarray(raw,       dtype=np.float64)
         cor_arr = np.asarray(corrected, dtype=np.float64)
-
         if raw_arr.shape != cor_arr.shape:
             raise ValueError(
                 f"Raw and corrected arrays must be the same length "
                 f"({raw_arr.size} vs {cor_arr.size})"
             )
-
         return {
             "raw": self.compute(
                 raw_arr, reference_thickness, tolerance,
@@ -247,28 +146,17 @@ class MSAService:
             ),
         }
 
-    # ==================================================================
-    # Internal
-    # ==================================================================
-
     def _capability_indices(
         self, std: float, bias: float, tolerance: float,
     ) -> tuple[float, float]:
         """
-        Applies the MSA Typ 1 formulae, guarding against s = 0.
-
-        When s is zero every measurement is identical — mathematically
-        the indices are infinite, but returning +inf breaks JSON
-        serialisation in the report.  We return a large sentinel (1e6)
-        so the UI / DB still render it as "very capable".
+        Returns (Cg, Cgk). When s is zero a large sentinel is returned so
+        JSON serialisation stays valid.
         """
         if std == 0.0:
             sentinel = 1.0e6
-            logger.debug(
-                "MSA: std == 0 — returning sentinel capability %g", sentinel
-            )
+            logger.debug("MSA: std == 0 — returning sentinel capability %g", sentinel)
             return sentinel, sentinel
-
-        cg  = (self.K / 100.0 * tolerance)            / (self.L * std)
-        cgk = ((self.K / 200.0) * tolerance - bias)   / ((self.L / 2.0) * std)
+        cg  = (self.K / 100.0 * tolerance)          / (self.L * std)
+        cgk = ((self.K / 200.0) * tolerance - bias) / ((self.L / 2.0) * std)
         return cg, cgk

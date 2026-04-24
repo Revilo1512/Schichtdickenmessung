@@ -1,34 +1,33 @@
 """
 Linear regression correction for transmission-based thickness measurements.
 
----------------------------------
 The Beer-Lambert model in calculation_service.py ignores reflection losses
-at the metal surface, which produces a systematic positive bias of
-~5.19 nm on Cu samples between 30-60 nm. Rather than modelling reflection
-physically (which would require the complex refractive index and Fresnel
-equations for each substrate), we opted for an empirical correction:
+at the metal surface and other systematic biases specific to the optical
+path. Rather than modelling reflection physically (which would require
+the complex refractive index and Fresnel equations for each substrate),
+this module provides an empirical correction:
 
     y = β₁ · x + β₀
 
-where x is the raw Lambert-Beer output and y is the known reference
-thickness.  The fit is done once per material (+wavelength +mode) from a
+where x is the raw Beer-Lambert output and y is the known reference
+thickness. The fit is done once per material (+wavelength +mode) from a
 batch of calibration samples whose true thickness is known from a
-reference method.  The fitted model is persisted and applied at
+reference method. The fitted model is persisted and applied at
 measurement time to produce `ThicknessCorrected`.
 
 This module provides:
-  * `CalibrationModel` - an immutable container for a fitted model.
-  * `CalibrationService.fit(...)` - least-squares fit + R² computation.
-  * `CalibrationService.split_*` - train / test splits for validation.
-  * `CalibrationService.evaluate(...)` - before/after metrics against a
+  * `CalibrationModel` — immutable container for a fitted model.
+  * `CalibrationService.fit(...)` — least-squares fit + R² computation.
+  * `CalibrationService.split_*` — train / test splits for validation.
+  * `CalibrationService.evaluate(...)` — before/after metrics against a
     held-out test set (bias, MAE, RMSE).
-  * `CalibrationService.save / load / load_active` - DB persistence.
+  * `CalibrationService.save / load / load_active` — DB persistence.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
 import numpy as np
@@ -48,30 +47,9 @@ class CalibrationModel:
     """
     Fitted linear correction model: y = slope * x + intercept.
 
-    Attributes
-    ----------
-    slope, intercept
-        Regression coefficients.
-    r_squared
-        Coefficient of determination on the training data.  Close to 1.0
-        means the linear fit explains the data well.
-    n_samples
-        Number of (measured, reference) points used in the fit.
-    shelf / book / page
-        refractiveindex.info material path — the model is only valid for
-        this exact material.
-    wavelength_um
-        Measurement wavelength in µm — the model is only valid here.
-    mode
-        'single' or 'multi'.  Multi-frame and single-frame have different
-        noise characteristics and should have separate calibrations.
-    min_ref_nm, max_ref_nm
-        The reference-thickness range covered by the training data.
-        `is_in_range()` uses these for an extrapolation-warning.
-    name, session_tag, note
-        Free-form metadata.
-    id
-        DB row id, or None for unsaved models.
+    The model is only valid for the exact (shelf, book, page, wavelength,
+    mode) combination it was fitted on — multi-frame and single-frame
+    have different noise characteristics and need separate calibrations.
     """
     slope:         float
     intercept:     float
@@ -84,33 +62,22 @@ class CalibrationModel:
     mode:          str
     min_ref_nm:    float
     max_ref_nm:    float
-    name:          str          = ""
-    session_tag:   str | None   = None
-    note:          str          = ""
-    id:            int | None   = None
-
-    # ------------------------------------------------------------------
-    # Behaviour
-    # ------------------------------------------------------------------
+    name:          str        = ""
+    session_tag:   str | None = None
+    note:          str        = ""
+    id:            int | None = None
 
     def predict(self, x: float) -> float:
-        """Applies the correction to a single raw value."""
         return self.slope * x + self.intercept
 
     def predict_array(self, x: np.ndarray) -> np.ndarray:
-        """Vectorised correction."""
         return self.slope * x + self.intercept
 
     def is_in_range(self, x: float, tolerance: float = 5.0) -> bool:
-        """
-        True if *x* is inside the calibration data range (± tolerance nm).
-        Applying the model outside this range is extrapolation and the
-        controller / UI should warn the user.
-        """
+        """True if *x* is inside the calibration data range (± tolerance nm)."""
         return (self.min_ref_nm - tolerance) <= x <= (self.max_ref_nm + tolerance)
 
     def summary(self) -> str:
-        """One-line human-readable summary, used in UI labels / logs."""
         return (
             f"{self.book}/{self.page} @ {self.wavelength_um} µm "
             f"[{self.mode}] — slope={self.slope:.4f}, "
@@ -125,19 +92,14 @@ class CalibrationModel:
 
 class CalibrationService:
     """
-    Fits and applies linear correction models.
-
-    The service is stateless — each call to ``fit``, ``evaluate``, etc.
-    returns a fresh result, so multiple calibrations can coexist safely
-    in the same process.  Persistence is optional: if a DatabaseService
-    is passed in at construction, ``save`` / ``load`` / ``load_active``
-    become available.
+    Fits and applies linear correction models. Stateless — each call to
+    ``fit``, ``evaluate``, etc. returns a fresh result.
     """
 
-    # Below this number of points the linear fit is too under-determined
-    # to be meaningful (you need at least 2 just to draw a line, 3 to get
-    # any residual, and ideally ≥4 for the range of 30–60 nm).
-    MIN_POINTS_FOR_FIT = 3
+    # Below this many points the linear fit is under-determined. Raised
+    # to 4 so that the minimum fit has at least 2 degrees of freedom
+    # for residual analysis and a more trustworthy slope.
+    MIN_POINTS_FOR_FIT = 4
 
     def __init__(self, db_service: "DatabaseService | None" = None):
         self.db_service = db_service
@@ -155,20 +117,10 @@ class CalibrationService:
         page:          str,
         wavelength_um: float,
         mode:          str,
-        name:          str = "",
+        name:          str        = "",
         session_tag:   str | None = None,
-        note:          str = "",
+        note:          str        = "",
     ) -> CalibrationModel:
-        """
-        Least-squares fit  y = slope · x + intercept.
-
-        Raises
-        ------
-        ValueError
-            If the input arrays have different lengths, or fewer than
-            ``MIN_POINTS_FOR_FIT`` points, or if the x values have zero
-            variance (all measurements are identical — can't fit a slope).
-        """
         x = np.asarray(measured,  dtype=np.float64)
         y = np.asarray(reference, dtype=np.float64)
 
@@ -186,10 +138,8 @@ class CalibrationService:
                 "Include samples with different reference thicknesses."
             )
 
-        # np.polyfit returns coefficients in descending degree order
         slope, intercept = np.polyfit(x, y, deg=1)
 
-        # R² computation (np.polyfit doesn't return it)
         y_pred  = slope * x + intercept
         ss_res  = float(np.sum((y - y_pred) ** 2))
         ss_tot  = float(np.sum((y - y.mean()) ** 2))
@@ -222,20 +172,17 @@ class CalibrationService:
         page:          str,
         wavelength_um: float,
         mode:          str,
-        name:          str = "",
+        name:          str        = "",
         session_tag:   str | None = None,
-        note:          str = "",
+        note:          str        = "",
     ) -> CalibrationModel:
         """
-        Convenience wrapper that pulls (Layer, ReferenceThickness) out of
-        DB-style row dicts and hands them to :meth:`fit`.
-
-        Rows whose ReferenceThickness or Layer is None are skipped.
-        Rows whose ``Mode`` does not match the requested *mode* are also
-        skipped — mixing single- and multi-frame measurements in one fit
-        would invalidate the model.
+        Pull (Layer, ReferenceThickness) pairs out of DB rows and fit.
+        Rows not matching the requested *mode* are skipped — mixing
+        single- and multi-frame data invalidates the model.
         """
-        measured, reference = [], []
+        measured:  list[float] = []
+        reference: list[float] = []
         for r in rows:
             if r.get("ReferenceThickness") is None or r.get("Layer") is None:
                 continue
@@ -264,16 +211,13 @@ class CalibrationService:
         wavelength_um: float,
         mode:          str,
         session_tag:   str | None = None,
-        name:          str = "",
-        note:          str = "",
+        probe:         str | None = None,
+        name:          str        = "",
+        note:          str        = "",
     ) -> CalibrationModel:
-        """
-        Pulls calibration rows from the DB and fits them.  Requires a
-        DatabaseService at construction.
-        """
         self._require_db()
         rows = self.db_service.get_calibration_rows(
-            book=book, page=page, session_tag=session_tag
+            book=book, page=page, session_tag=session_tag, probe=probe,
         )
         return self.fit_from_rows(
             rows, shelf=shelf, book=book, page=page,
@@ -291,15 +235,6 @@ class CalibrationService:
         test_ratio:  float = 0.3,
         random_seed: int | None = 42,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """
-        Random split of rows into (train, test) preserving the overall
-        distribution of reference thicknesses.
-
-        Good when every reference sample has many repeated measurements
-        and you want to test how well the fit generalises across repeats.
-        Use :meth:`split_by_reference` instead if you want to test
-        generalisation to new reference thicknesses.
-        """
         if not 0 < test_ratio < 1:
             raise ValueError("test_ratio must be in (0, 1)")
 
@@ -320,12 +255,6 @@ class CalibrationService:
         test_references: list[float],
         tolerance:       float = 0.5,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """
-        Hold-out split by reference thickness.  Rows whose
-        ``ReferenceThickness`` is within *tolerance* nm of any value in
-        *test_references* go to the test set; everything else goes to
-        train.
-        """
         train: list[dict[str, Any]] = []
         test:  list[dict[str, Any]] = []
         for row in rows:
@@ -349,21 +278,10 @@ class CalibrationService:
         reference: list[float] | np.ndarray,
     ) -> dict[str, float]:
         """
-        Computes before/after metrics for *model* on a (measured,
-        reference) test set.
+        Before/after metrics for *model* on a (measured, reference) test set.
 
-        Returns
-        -------
-        dict
-            {
-              'n', 'mean_bias_before', 'mean_bias_after',
-              'mae_before',      'mae_after',
-              'rmse_before',     'rmse_after',
-              'max_abs_error_before', 'max_abs_error_after',
-            }
-        Positive bias = the system reads high.  BA1 reported +5.19 nm
-        mean bias for Cu 30-60 nm; a successful calibration pushes
-        mean_bias_after close to zero.
+        Positive bias = the system reads high. A successful calibration
+        pushes mean_bias_after close to zero.
         """
         x = np.asarray(measured,  dtype=np.float64)
         y = np.asarray(reference, dtype=np.float64)
@@ -372,8 +290,8 @@ class CalibrationService:
             raise ValueError("measured and reference must have same non-zero length")
 
         y_pred     = model.predict_array(x)
-        err_before = x       - y        # raw error
-        err_after  = y_pred  - y        # error after correction
+        err_before = x       - y
+        err_after  = y_pred  - y
 
         return {
             "n":                    int(len(x)),
@@ -392,13 +310,6 @@ class CalibrationService:
     # ==================================================================
 
     def save(self, model: CalibrationModel, set_active: bool = False) -> int:
-        """
-        Writes *model* to the calibrations table.  Returns the new row id.
-
-        If ``set_active=True`` the newly saved model is marked active
-        (and any previously active model for the same material/mode is
-        deactivated).
-        """
         self._require_db()
         data = {
             "Name":       model.name,
@@ -422,7 +333,6 @@ class CalibrationService:
         return new_id
 
     def load(self, calibration_id: int) -> CalibrationModel | None:
-        """Loads a model by id."""
         self._require_db()
         row = self.db_service.get_calibration(calibration_id)
         return self._row_to_model(row) if row else None
@@ -431,7 +341,6 @@ class CalibrationService:
         self, shelf: str, book: str, page: str,
         wavelength_um: float, mode: str,
     ) -> CalibrationModel | None:
-        """Returns the currently active model for a material/mode, or None."""
         self._require_db()
         row = self.db_service.get_active_calibration(
             shelf=shelf, book=book, page=page,
@@ -445,7 +354,6 @@ class CalibrationService:
         page:  str | None = None, wavelength_um: float | None = None,
         mode:  str | None = None, active_only: bool = False,
     ) -> list[CalibrationModel]:
-        """Returns all stored models matching the given filters."""
         self._require_db()
         rows = self.db_service.get_calibrations(
             shelf=shelf, book=book, page=page,
@@ -467,7 +375,6 @@ class CalibrationService:
 
     @staticmethod
     def _row_to_model(row: dict[str, Any]) -> CalibrationModel:
-        """Converts a DB row into a CalibrationModel.  Tolerates NULLs."""
         return CalibrationModel(
             id            = row.get("id"),
             slope         = float(row["Slope"]),
