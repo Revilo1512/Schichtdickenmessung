@@ -1,145 +1,144 @@
-import os
+"""
+Export filtered measurement rows (and their referenced images) to a
+timestamped ZIP archive.
+"""
+
+from __future__ import annotations
+
 import csv
 import datetime
-import base64
-import tempfile
+import logging
 import shutil
-import zipfile
+import tempfile
 from pathlib import Path
-from typing import Optional
 
-from layer_thickness_app.services.database_service import DatabaseService
+from layer_thickness_app.services.database_service import (
+    DatabaseService,
+    VALID_COLUMNS,
+)
+
+logger = logging.getLogger(__name__)
+
+# Export column order. 'id' is dropped; anything missing from this list
+# is appended after VALID_COLUMNS so future additions don't get lost.
+_PREFERRED_ORDER: tuple[str, ...] = (
+    "Date", "Name",
+    "Layer", "ThicknessCorrected", "ReferenceThickness",
+    "Wavelength", "Mode",
+    "Shelf", "Book", "Page",
+    "Probe", "RunIndex", "SessionTag",
+    "MeanGrayRef", "MeanGraySample", "StdGrayRef", "StdGraySample",
+    "FrameCountRef", "FrameCountSample",
+    "RefImage", "MatImage",
+    "Note",
+)
 
 
 class ExportService:
     """
-    Exports measurement data from the DatabaseService to a ZIP archive.
+    Exports measurement data to a timestamped ZIP archive.
 
-    The archive will contain:
-    - 'measurements.csv' (with paths to images)
-    - 'img/' folder (with all the .png image files)
+    The archive contains ``measurements.csv`` (with ``img/``-relative paths)
+    and an ``img/`` folder with the referenced .png files. Stored
+    filenames are preserved so an export/import round-trip is
+    byte-identical.
     """
 
     def __init__(self, db_service: DatabaseService):
-        self.db_service = db_service
-        self.image_dir_path = Path(self.db_service.db_path).parent / "images"
+        self.db_service     = db_service
+        self.image_dir_path = self.db_service.image_dir_path
 
     def export_to_zip(
         self,
-        export_dir: str,
-        name_filter: Optional[str] = None,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        shelf: Optional[str] = None,
-        book: Optional[str] = None,
-        page: Optional[str] = None,
-        note_filter: Optional[str] = None,
+        export_dir:  str | Path,
+        name_filter: str | None = None,
+        start_date:  str | None = None,
+        end_date:    str | None = None,
+        shelf:       str | None = None,
+        book:        str | None = None,
+        page:        str | None = None,
+        note_filter: str | None = None,
+        session_tag: str | None = None,
+        probe:       str | None = None,
     ) -> str:
-        """
-        Fetches filtered measurements, copies images from the 'data/images'
-        folder, creates a CSV, and saves them as a single timestamped ZIP file.
-
-        Returns:
-            str: The full path to the generated ZIP file, or an empty string if
-                 the export failed or there was no data.
-        """
-        print("Starting data export to ZIP...")
+        """Returns the path to the generated ZIP, or "" on failure / no data."""
+        logger.info("Starting data export to ZIP...")
 
         data = self.db_service.get_all_filtered_measurements(
-            name_filter, start_date, end_date, shelf, book, page, note_filter
+            name_filter=name_filter, start_date=start_date, end_date=end_date,
+            shelf=shelf, book=book, page=page, note_filter=note_filter,
+            session_tag=session_tag, probe=probe,
         )
-
         if not data:
-            print("No data found matching filters to export.")
+            logger.info("No data found matching filters to export.")
             return ""
 
-        temp_dir = tempfile.mkdtemp()
-        img_dir = os.path.join(temp_dir, "img")
-        csv_path = os.path.join(temp_dir, "measurements.csv")
+        export_dir = Path(export_dir)
+        temp_dir   = Path(tempfile.mkdtemp())
+        img_dir    = temp_dir / "img"
+        csv_path   = temp_dir / "measurements.csv"
 
         try:
-            os.makedirs(img_dir, exist_ok=True)
-            csv_data = []  # new list of dicts for the CSV
+            img_dir.mkdir(parents=True, exist_ok=True)
 
-            # --- 1. Copy images, create new rows for CSV ---
+            # Copy images preserving the stored filenames.
             for row in data:
-                row_dict = dict(row)  # Make a mutable copy
-                db_id = row_dict["id"]
+                for db_key in ("RefImage", "MatImage"):
+                    filename = row.get(db_key)
+                    if not filename:
+                        continue
+                    src = self.image_dir_path / filename
+                    if not src.exists():
+                        logger.warning("Source image not found, skipping: %s", src)
+                        continue
+                    shutil.copy(src, img_dir / filename)
+                # Rewrite the path fields to be ZIP-relative.
+                if row.get("RefImage"):
+                    row["RefImage"] = f"img/{row['RefImage']}"
+                if row.get("MatImage"):
+                    row["MatImage"] = f"img/{row['MatImage']}"
 
-                # Get the source filenames from the DB
-                ref_img_filename = row_dict.get("RefImage")
-                mat_img_filename = row_dict.get("MatImage")
+            export_headers = self._build_header()
 
-                # Define relative paths for the CSV (inside the zip)
-                ref_img_csv_path = f"img/ref_{db_id}.png"
-                mat_img_csv_path = f"img/mat_{db_id}.png"
-
-                # Define full destination paths (in the temp zip folder)
-                ref_img_dest_path = os.path.join(img_dir, f"ref_{db_id}.png")
-                mat_img_dest_path = os.path.join(img_dir, f"mat_{db_id}.png")
-
-                # Copy images from data/images to the temp folder
-                if ref_img_filename:
-                    ref_img_src_path = self.image_dir_path / ref_img_filename
-                    if ref_img_src_path.exists():
-                        shutil.copy(ref_img_src_path, ref_img_dest_path)
-                    else:
-                        print(f"Warning: Source image not found: {ref_img_src_path}")
-
-                if mat_img_filename:
-                    mat_img_src_path = self.image_dir_path / mat_img_filename
-                    if mat_img_src_path.exists():
-                        shutil.copy(mat_img_src_path, mat_img_dest_path)
-                    else:
-                        print(f"Warning: Source image not found: {mat_img_src_path}")
-
-                # Update row dict with paths *relative to the zip*
-                row_dict["RefImage"] = ref_img_csv_path
-                row_dict["MatImage"] = mat_img_csv_path
-
-                csv_data.append(row_dict)
-
-            # --- 2. Write the new data (with paths) to the CSV ---
-            if not csv_data:
-                print("No data to write to CSV.")  # Should be caught by 'if not data'
-                return ""
-
-            # Get headers from the first processed row and exclude 'id'
-            all_headers = list(csv_data[0].keys())
-            export_headers = [h for h in all_headers if h != "id"]
-
-            # Ensure 'Note' is last if it exists, for better readability (optional)
-            if "Note" in export_headers:
-                export_headers.remove("Note")
-                export_headers.append("Note")
-
-            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            with csv_path.open("w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(
-                    f, fieldnames=export_headers, extrasaction="ignore"
+                    f, fieldnames=export_headers, extrasaction="ignore",
                 )
                 writer.writeheader()
-                writer.writerows(csv_data)
+                writer.writerows(data)
 
-            # --- 3. Create the ZIP file ---
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            zip_name = f"measurements_export_{timestamp}"
-            zip_base_path = os.path.join(export_dir, zip_name)
-
-            # shutil.make_archive creates 'zip_name.zip'
-            zip_filepath = shutil.make_archive(
-                base_name=zip_base_path, format="zip", root_dir=temp_dir
+            timestamp     = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            zip_base_path = export_dir / f"measurements_export_{timestamp}"
+            zip_filepath  = shutil.make_archive(
+                base_name=str(zip_base_path), format="zip", root_dir=str(temp_dir),
             )
 
-            print(f"Successfully exported {len(data)} rows to {zip_filepath}")
+            logger.info("Successfully exported %d rows to %s", len(data), zip_filepath)
             return zip_filepath
 
         except Exception as e:
-            print(f"An unexpected error occurred during export: {e}")
+            logger.exception("Unexpected error during export: %s", e)
             return ""
         finally:
-            # --- 4. Clean up temp directory ---
             try:
                 shutil.rmtree(temp_dir)
-                print(f"Cleaned up temp directory: {temp_dir}")
-            except Exception as e:
-                print(f"Error cleaning up temp directory {temp_dir}: {e}")
+                logger.debug("Cleaned up temp directory: %s", temp_dir)
+            except OSError as e:
+                logger.warning("Error cleaning up temp directory %s: %s", temp_dir, e)
+
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_header() -> list[str]:
+        """Preferred order first, anything else from VALID_COLUMNS after."""
+        exportable = VALID_COLUMNS - {"id"}
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for col in _PREFERRED_ORDER:
+            if col in exportable:
+                ordered.append(col)
+                seen.add(col)
+        for col in sorted(exportable):
+            if col not in seen:
+                ordered.append(col)
+        return ordered

@@ -1,43 +1,40 @@
+"""
+Dashboard homepage. Shows a welcome message, navigation hints, the
+measurement-device image and the camera-status card.
+"""
+
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QFrame,
-    QFormLayout,
-    QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QFrame, QFormLayout, QLabel,
 )
 from PyQt6.QtGui import QPixmap
 from qfluentwidgets import (
-    TitleLabel,
-    BodyLabel,
-    SettingCardGroup,
-    ComboBoxSettingCard,
-    OptionsConfigItem,
-    OptionsValidator,
-    PushButton,
-    FluentIcon,
-    InfoBar,
-    InfoBarPosition,
-    IconWidget,
-    StrongBodyLabel,
-    SubtitleLabel,
+    TitleLabel, BodyLabel, SettingCardGroup, ComboBoxSettingCard,
+    OptionsConfigItem, OptionsValidator, PushButton, FluentIcon,
+    InfoBar, InfoBarPosition, IconWidget, StrongBodyLabel, SubtitleLabel,
 )
 
 from layer_thickness_app.services.camera_service import CameraService
+from layer_thickness_app.gui.theme import (
+    card_style, status_label_style, BORDER_FAINT,
+)
 
 logger = logging.getLogger(__name__)
 
-# --- PATH SETUP ---
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR   = Path(__file__).resolve().parent.parent
 IMAGE_PATH = BASE_DIR / "resources" / "measurement_device.jpg"
 
+_STATUS_PANEL_OBJECT_NAME = "status_card_content"
+
+
 class HomePage(QWidget):
-    """Dashboard homepage that shows a welcome message and camera status."""
+    """Dashboard homepage."""
 
     def __init__(self, camera_service: CameraService):
         super().__init__()
@@ -45,7 +42,7 @@ class HomePage(QWidget):
         self.available_cameras: list[dict[str, Any]] = []
 
         self.setObjectName("home_page")
-        
+
         self._init_layout()
         self._connect_signals()
 
@@ -53,41 +50,37 @@ class HomePage(QWidget):
         self.update_status_display()
         self._auto_connect_camera()
 
-    # -----------------------------
-    # UI Initialization & Layout
-    # -----------------------------
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+
     def _init_layout(self):
-        """Set up the main layout and initialize widgets."""
         self.main_layout = QHBoxLayout(self)
         self.main_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.main_layout.setContentsMargins(40, 40, 40, 40)
         self.main_layout.setSpacing(40)
 
-        # Build the two main columns
         self._setup_left_panel()
         self._setup_right_panel()
 
-        self.main_layout.addWidget(self.left_column_widget, 5)
+        self.main_layout.addWidget(self.left_column_widget,  5)
         self.main_layout.addWidget(self.right_column_widget, 4)
 
     def _setup_left_panel(self):
-        """Builds the left side of the dashboard (Text Info & Camera Settings)."""
         self.left_column_widget = QWidget(self)
         left_layout = QVBoxLayout(self.left_column_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(40) 
+        left_layout.setSpacing(40)
 
-        # ---------------------------------------------------
-        # 1. Text Info
-        # ---------------------------------------------------
+        # Welcome text
         self.text_widget = QWidget()
         text_layout = QVBoxLayout(self.text_widget)
         text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(5)
 
-        self.title_label = TitleLabel("Layer Thickness Tool")
+        self.title_label    = TitleLabel("Layer Thickness Tool")
         self.subtitle_label = SubtitleLabel("Welcome to the dashboard")
-        
+
         list_html = (
             "<div style='line-height: 1.8em; font-size: 15px; margin-top: 15px;'>"
             "<p>Use the navigation panel on the left to:</p>"
@@ -107,14 +100,13 @@ class HomePage(QWidget):
         text_layout.addWidget(self.subtitle_label)
         text_layout.addWidget(self.description_label)
 
-        # ---------------------------------------------------
-        # 2. Camera Configuration Group (Bottom Left)
-        # ---------------------------------------------------
+        # Camera configuration group
         self.camera_group = SettingCardGroup("Camera Configuration", self)
 
         initial_cam_options = ["No cameras found"]
         self.camera_config_item = OptionsConfigItem(
-            "Camera", "SelectedCamera", initial_cam_options[0], OptionsValidator(initial_cam_options)
+            "Camera", "SelectedCamera", initial_cam_options[0],
+            OptionsValidator(initial_cam_options),
         )
         self.camera_selector_card = ComboBoxSettingCard(
             self.camera_config_item,
@@ -126,14 +118,8 @@ class HomePage(QWidget):
         )
 
         self.status_widget = QFrame()
-        self.status_widget.setObjectName("status_card_content")
-        self.status_widget.setStyleSheet("""
-            QFrame#status_card_content {
-                background-color: transparent;
-                border: 1px solid rgba(128, 128, 128, 0.25);
-                border-radius: 8px;
-            }
-        """)
+        self.status_widget.setObjectName(_STATUS_PANEL_OBJECT_NAME)
+        self.status_widget.setStyleSheet(card_style(_STATUS_PANEL_OBJECT_NAME))
 
         main_status_layout = QVBoxLayout(self.status_widget)
         main_status_layout.setContentsMargins(20, 15, 20, 15)
@@ -148,14 +134,14 @@ class HomePage(QWidget):
 
         status_form_layout = QFormLayout()
         status_form_layout.setSpacing(12)
-        
-        self.status_label = BodyLabel("Disconnected")
-        self.model_label = BodyLabel("N/A")
+
+        self.status_label     = BodyLabel("Disconnected")
+        self.model_label      = BodyLabel("N/A")
         self.resolution_label = BodyLabel("N/A")
 
-        status_form_layout.addRow(StrongBodyLabel("Connection:"), self.status_label)
-        status_form_layout.addRow(StrongBodyLabel("Device Model:"), self.model_label)
-        status_form_layout.addRow(StrongBodyLabel("Resolution:"), self.resolution_label)
+        status_form_layout.addRow(StrongBodyLabel("Connection:"),    self.status_label)
+        status_form_layout.addRow(StrongBodyLabel("Device Model:"),  self.model_label)
+        status_form_layout.addRow(StrongBodyLabel("Resolution:"),    self.resolution_label)
         main_status_layout.addLayout(status_form_layout)
 
         self.action_button_widget = QWidget()
@@ -166,7 +152,7 @@ class HomePage(QWidget):
         self.refresh_button = PushButton(FluentIcon.SYNC, "Refresh List")
         self.connect_button = PushButton(FluentIcon.PLAY, "Connect")
 
-        button_layout.addStretch(1) 
+        button_layout.addStretch(1)
         button_layout.addWidget(self.refresh_button)
         button_layout.addWidget(self.connect_button)
 
@@ -177,10 +163,9 @@ class HomePage(QWidget):
 
         left_layout.addWidget(self.text_widget)
         left_layout.addWidget(self.camera_group)
-        left_layout.addStretch(1) 
+        left_layout.addStretch(1)
 
     def _setup_right_panel(self):
-        """Builds the right side of the dashboard (Image)."""
         self.right_column_widget = QWidget(self)
         right_layout = QVBoxLayout(self.right_column_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -188,37 +173,41 @@ class HomePage(QWidget):
         self.image_label = QLabel(self)
         if IMAGE_PATH.exists():
             pixmap = QPixmap(str(IMAGE_PATH))
-            
-            scaled_pixmap = pixmap.scaled(
-                450, 600, 
-                Qt.AspectRatioMode.KeepAspectRatio, 
-                Qt.TransformationMode.SmoothTransformation
+            scaled = pixmap.scaled(
+                450, 600,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
             )
-            self.image_label.setPixmap(scaled_pixmap)
-            self.image_label.setFixedSize(scaled_pixmap.size())
+            self.image_label.setPixmap(scaled)
+            self.image_label.setFixedSize(scaled.size())
             self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.image_label.setStyleSheet("border-radius: 12px; border: 1px solid rgba(128, 128, 128, 0.2);")
+            self.image_label.setStyleSheet(
+                f"border-radius: 12px; border: 1px solid {BORDER_FAINT};"
+            )
         else:
             logger.warning("Measurement device image not found at %s", IMAGE_PATH)
             self.image_label.setText("Image not found")
             self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        right_layout.addWidget(self.image_label, alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        right_layout.addWidget(
+            self.image_label,
+            alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
+        )
         right_layout.addStretch(1)
 
-    # -----------------------------
+    # ------------------------------------------------------------------
     # Signals
-    # -----------------------------
+    # ------------------------------------------------------------------
+
     def _connect_signals(self):
-        """Connect signals to slots."""
         self.refresh_button.clicked.connect(self.refresh_camera_list)
         self.connect_button.clicked.connect(self.toggle_camera_connection)
 
-    # -----------------------------
-    # Camera Handling
-    # -----------------------------
+    # ------------------------------------------------------------------
+    # Camera handling
+    # ------------------------------------------------------------------
+
     def _auto_connect_camera(self):
-        """Attempts to connect to the first available camera on startup."""
         if self.available_cameras and not self.camera_service.get_status()["connected"]:
             logger.info("Attempting to auto-connect to camera...")
             first_cam_id = self.available_cameras[0]["id"]
@@ -227,22 +216,18 @@ class HomePage(QWidget):
                 InfoBar.success(
                     title="Camera Auto-Connected",
                     content=f"Connected to {self.camera_service.get_status()['model']}.",
-                    duration=3000,
-                    parent=self,
-                    position=InfoBarPosition.TOP,
+                    duration=3000, parent=self, position=InfoBarPosition.TOP,
                 )
             else:
                 InfoBar.error(
                     title="Auto-Connect Failed",
                     content="Could not initialize the first available camera.",
-                    parent=self,
-                    position=InfoBarPosition.TOP,
+                    parent=self, position=InfoBarPosition.TOP,
                 )
 
             self.update_status_display()
 
     def refresh_camera_list(self):
-        """Fetch available cameras and update combobox."""
         if self.camera_service.get_status()["connected"]:
             return
 
@@ -265,15 +250,12 @@ class HomePage(QWidget):
         self.update_status_display()
 
     def toggle_camera_connection(self):
-        """Connects or disconnects the selected camera."""
         if self.camera_service.get_status()["connected"]:
             self.camera_service.disconnect()
             InfoBar.success(
                 title="Camera Disconnected",
                 content="The camera has been disconnected.",
-                duration=3000,
-                parent=self,
-                position=InfoBarPosition.TOP,
+                duration=3000, parent=self, position=InfoBarPosition.TOP,
             )
             self.refresh_camera_list()
         else:
@@ -281,8 +263,7 @@ class HomePage(QWidget):
                 InfoBar.error(
                     title="Error",
                     content="No cameras available to connect.",
-                    parent=self,
-                    position=InfoBarPosition.TOP,
+                    parent=self, position=InfoBarPosition.TOP,
                 )
                 return
 
@@ -291,8 +272,7 @@ class HomePage(QWidget):
                 InfoBar.error(
                     title="Error",
                     content="No camera selected.",
-                    parent=self,
-                    position=InfoBarPosition.TOP,
+                    parent=self, position=InfoBarPosition.TOP,
                 )
                 return
 
@@ -302,30 +282,26 @@ class HomePage(QWidget):
                 InfoBar.success(
                     title="Camera Connected",
                     content=f"Connected to {self.camera_service.get_status()['model']}.",
-                    duration=3000,
-                    parent=self,
-                    position=InfoBarPosition.TOP,
+                    duration=3000, parent=self, position=InfoBarPosition.TOP,
                 )
             else:
                 InfoBar.error(
                     title="Connection Failed",
                     content="Could not initialize the selected camera.",
-                    parent=self,
-                    position=InfoBarPosition.TOP,
+                    parent=self, position=InfoBarPosition.TOP,
                 )
 
         self.update_status_display()
 
     def update_status_display(self):
-        """Update labels and button states based on the camera service's status."""
         status = self.camera_service.get_status()
 
         if status["connected"]:
             self.status_label.setText("Connected")
-            self.status_label.setStyleSheet("font-weight: bold; color: #00b050;")  # Green
+            self.status_label.setStyleSheet(status_label_style("ok"))
             self.model_label.setText(status["model"])
             self.resolution_label.setText(f"{status['width']} x {status['height']}")
-            
+
             self.connect_button.setText("Disconnect")
             self.connect_button.setIcon(FluentIcon.PAUSE)
 
@@ -334,10 +310,10 @@ class HomePage(QWidget):
             self.connect_button.setEnabled(True)
         else:
             self.status_label.setText("Disconnected")
-            self.status_label.setStyleSheet("font-weight: bold; color: #e04141;")  # Red
+            self.status_label.setStyleSheet(status_label_style("error"))
             self.model_label.setText("N/A")
             self.resolution_label.setText("N/A")
-            
+
             self.connect_button.setText("Connect")
             self.connect_button.setIcon(FluentIcon.PLAY)
 

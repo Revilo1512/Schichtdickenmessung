@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    Layer Thickness Tool icon.
+    Cross-section diagram: a copper thin film sitting on a substrate,
+    with a vertical light beam passing through both layers and exiting
+    visibly attenuated below. A measurement bracket on the left marks
+    the film thickness.
+  -->
+
+  <defs>
+    <!-- Bright cyan-to-white gradient for the incoming beam -->
+    <linearGradient id="beamIn" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#0df8fd" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.95"/>
+    </linearGradient>
+
+    <!-- Dimmer, fading gradient for the attenuated outgoing beam -->
+    <linearGradient id="beamOut" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#0df8fd" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#0df8fd" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- =============================================================== -->
+  <!-- INCOMING BEAM (top, bright)                                     -->
+  <!-- =============================================================== -->
+
+  <!-- Outer glow / halo -->
+  <rect x="486" y="140" width="52" height="440"
+        rx="26" fill="#0df8fd" opacity="0.18"/>
+
+  <!-- Bright core -->
+  <rect x="503" y="140" width="18" height="440"
+        rx="9" fill="url(#beamIn)"/>
+
+  <!-- =============================================================== -->
+  <!-- FILM + SUBSTRATE STACK                                          -->
+  <!-- (drawn as two paths so the meeting edge is flat, with rounded   -->
+  <!-- outer corners only)                                             -->
+  <!-- =============================================================== -->
+
+  <!-- Copper film (top layer, rounded top corners, flat bottom) -->
+  <path fill="#b87333"
+        d="M 252 580
+           Q 232 580 232 600
+           L 232 660
+           L 792 660
+           L 792 600
+           Q 792 580 772 580
+           Z"/>
+
+  <!-- Substrate (bottom layer, flat top, rounded bottom corners) -->
+  <path fill="#1a2340"
+        d="M 232 660
+           L 792 660
+           L 792 780
+           Q 792 800 772 800
+           L 252 800
+           Q 232 800 232 780
+           Z"/>
+
+  <!-- =============================================================== -->
+  <!-- OUTGOING BEAM (bottom, attenuated)                              -->
+  <!-- Visibly narrower and dimmer than the incoming beam — the        -->
+  <!-- absorption cue.                                                 -->
+  <!-- =============================================================== -->
+
+  <!-- Faint outer glow -->
+  <rect x="497" y="800" width="30" height="100"
+        rx="15" fill="#0df8fd" opacity="0.10"/>
+
+  <!-- Dim core -->
+  <rect x="509" y="800" width="10" height="100"
+        rx="5" fill="url(#beamOut)"/>
+
+  <!-- =============================================================== -->
+  <!-- MEASUREMENT BRACKET (left side, marks film thickness)           -->
+  <!-- =============================================================== -->
+
+  <g fill="#0df8fd">
+    <!-- Top tick (aligned with film top edge at y=580) -->
+    <rect x="110" y="577" width="50" height="6" rx="3"/>
+
+    <!-- Bottom tick (aligned with film bottom edge at y=660) -->
+    <rect x="110" y="657" width="50" height="6" rx="3"/>
+
+    <!-- Vertical dimension line connecting the two arrowheads -->
+    <rect x="132" y="605" width="6" height="30" rx="3"/>
+
+    <!-- Up arrowhead (tip touches top tick) -->
+    <path d="M 135 583 L 122 605 L 148 605 Z"/>
+
+    <!-- Down arrowhead (tip touches bottom tick) -->
+    <path d="M 135 657 L 122 635 L 148 635 Z"/>
+  </g>
+</svg>
