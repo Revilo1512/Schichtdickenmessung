@@ -34,7 +34,7 @@ RESOURCES_PATH = BASE_DIR / "gui" / "resources"
 
 LIGHT_THEME_QSS = RESOURCES_PATH / "light_theme.qss"
 DARK_THEME_QSS  = RESOURCES_PATH / "dark_theme.qss"
-ICON_PATH       = RESOURCES_PATH / "duck_icon.svg"
+ICON_PATH       = RESOURCES_PATH / "icons" / "app_icon.svg"
 
 
 def setup_logging():

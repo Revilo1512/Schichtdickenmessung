@@ -33,7 +33,7 @@ from layer_thickness_app.config.config                    import AppConfig
 logger = logging.getLogger(__name__)
 
 BASE_DIR    = Path(__file__).resolve().parent.parent
-ICON_PATH   = BASE_DIR / "gui" / "resources" / "duck_icon.svg"
+ICON_PATH   = BASE_DIR / "gui" / "resources" / "icons" / "app_icon.svg"
 DEFAULT_DB  = Path("data") / "measurements.db"
 
 
