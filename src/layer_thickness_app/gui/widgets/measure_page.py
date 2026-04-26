@@ -1,3 +1,12 @@
+"""
+Measurement capture page.
+
+Provides material/wavelength/frame-count selection, optional calibration
+metadata, batch-mode automation and live preview readout. All inline
+styling routes through ``layer_thickness_app.gui.theme`` so colors and
+borders live in one place.
+"""
+
 from __future__ import annotations
 
 import re
@@ -11,14 +20,18 @@ from PyQt6.QtWidgets import (
     QPushButton, QFrame, QLineEdit, QCheckBox, QHBoxLayout,
     QSpinBox, QDoubleSpinBox, QGridLayout,
 )
-from PyQt6.QtGui  import (
+from PyQt6.QtGui import (
     QStandardItemModel, QStandardItem, QFont, QPixmap, QImage, QShortcut,
     QKeySequence,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal
 from qfluentwidgets import InfoBar, InfoBarPosition
 
 from layer_thickness_app.config.config import AppConfig
+from layer_thickness_app.gui.theme import (
+    header_font, hint_font, title_font,
+    image_preview_style, muted_label_style, live_label_style,
+)
 
 if TYPE_CHECKING:
     from layer_thickness_app.services.camera_service import FrameCaptureResult
@@ -31,12 +44,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 class MaterialSelector(QFrame):
     """
-    Three-cascading-combobox selector over the refractiveindex.info
-    catalog. Emits `selection_changed(str | None)` whenever the full
+    Three cascading combo-boxes over the refractiveindex.info catalog.
+    Emits ``selection_changed(str | None)`` whenever the full
     shelf/book/page path becomes valid or invalid.
     """
 
-    selection_changed = pyqtSignal(object)   # str | None
+    selection_changed = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
@@ -59,11 +72,11 @@ class MaterialSelector(QFrame):
         self.page_combo.setModel(self.page_model)
 
         self.divider_font = QFont(); self.divider_font.setItalic(True); self.divider_font.setBold(True)
-        self.header_font  = QFont(); self.header_font.setBold(True);    self.header_font.setPointSize(10)
+        self._header_font = header_font(10, bold=True)
 
-        shelf_label = QLabel("Shelf (Category):"); shelf_label.setFont(self.header_font)
-        book_label  = QLabel("Book (Material):");  book_label.setFont(self.header_font)
-        page_label  = QLabel("Page (Dataset):");   page_label.setFont(self.header_font)
+        shelf_label = QLabel("Shelf (Category):"); shelf_label.setFont(self._header_font)
+        book_label  = QLabel("Book (Material):");  book_label.setFont(self._header_font)
+        page_label  = QLabel("Page (Dataset):");   page_label.setFont(self._header_font)
 
         layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(shelf_label); layout.addWidget(self.shelf_combo)
@@ -143,17 +156,22 @@ class MaterialSelector(QFrame):
 # ---------------------------------------------------------------------------
 class MeasurePage(QWidget):
     """
-    Measurement capture page.
+    Measurement capture page. Public API for the controller:
 
-    Features wired through to the controller:
-      - Material / wavelength / frame-count / name / note / save
-      - Calibration-mode section with Reference Thickness and Session Tag
-      - Probe and Run index fields for campaign runs
-      - Batch mode: holds reference + metadata and auto-saves N samples
-      - Keyboard shortcuts: R = reference, S = sample, Enter = calculate,
-        Ctrl+S = toggle save
-      - Real-time gray-mean readout (live preview updates when connected)
-      - "Keep reference" lock so reset only clears the sample preview
+      - ``populate_material_selector(data)``
+      - ``set_capture(capture, image_type)``
+      - ``set_live_gray(ref_gray, mat_gray)``
+      - ``set_profile_caption(text)`` / ``set_reference_thickness_hint(lo, hi)``
+      - ``get_measurement_data()`` / ``get_frame_count()``
+      - ``set_calculation_enabled(bool)`` / ``set_result_text(text, append=False)``
+      - ``show_info_bar(...)``
+      - Batch helpers: ``batch_start``, ``batch_advance``, ``batch_finish``,
+        ``batch_is_active``, ``batch_runs_configured``,
+        ``batch_current_run``, ``batch_total_runs``
+      - ``reset_all()``
+
+    Keyboard shortcuts: R = reference, S = sample, Enter = calculate,
+    Ctrl+S = toggle save.
     """
 
     config_changed              = pyqtSignal()
@@ -161,19 +179,17 @@ class MeasurePage(QWidget):
     capture_reference_requested = pyqtSignal()
     capture_material_requested  = pyqtSignal()
     reset_requested             = pyqtSignal()
-    material_changed            = pyqtSignal(object)   # str | None
-    batch_sample_requested      = pyqtSignal()         # batch-mode sample capture
+    material_changed            = pyqtSignal(object)
+    batch_sample_requested      = pyqtSignal()
 
     FRAME_COUNT_MIN     = 1
     FRAME_COUNT_MAX     = 100
     FRAME_COUNT_DEFAULT = AppConfig.FRAME_COUNT_DEFAULT
 
-    # Reference-thickness input bounds (nm). 0 = "not set".
     REF_NM_MIN:     float = 0.0
     REF_NM_MAX:     float = 5000.0
     REF_NM_DEFAULT: float = 0.0
 
-    # Batch-mode defaults
     BATCH_RUNS_DEFAULT = 25
     BATCH_RUNS_MIN     = 1
     BATCH_RUNS_MAX     = 500
@@ -186,12 +202,10 @@ class MeasurePage(QWidget):
         self.reference_capture: "FrameCaptureResult | None" = None
         self.material_capture:  "FrameCaptureResult | None" = None
 
-        # Batch state
         self._batch_active:        bool = False
         self._batch_current_run:   int  = 0
         self._batch_total_runs:    int  = 0
 
-        # Widget references (set during _build_ui)
         self.ref_image_button: QPushButton
         self.mat_image_button: QPushButton
         self.ref_image_label:  QLabel
@@ -240,7 +254,6 @@ class MeasurePage(QWidget):
         main_layout.addWidget(left_column,  1)
         main_layout.addWidget(right_column, 1)
 
-        # Connect internal signals now that all widgets exist.
         self._connect_internal_signals()
 
     # ==================================================================
@@ -248,37 +261,31 @@ class MeasurePage(QWidget):
     # ==================================================================
 
     def _create_image_capture_widget(self, title: str, prefix: str) -> QFrame:
-        """
-        Build a capture panel. References to the child widgets are stored
-        directly on self so we don't need findChild() later.
-        """
         frame  = QFrame()
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        header_font = QFont(); header_font.setBold(True); header_font.setPointSize(12)
-        stats_font  = QFont(); stats_font.setPointSize(8)
+        title_font_  = header_font(12, bold=True)
+        stats_font_  = hint_font(8)
 
-        title_label = QLabel(title); title_label.setFont(header_font)
+        title_label = QLabel(title); title_label.setFont(title_font_)
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         image_placeholder = QLabel("Image Preview")
         image_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         image_placeholder.setMinimumSize(200, 150)
-        image_placeholder.setStyleSheet(
-            "background-color: #2E2E2E; color: white; border: 1px solid #555;"
-        )
+        image_placeholder.setStyleSheet(image_preview_style())
 
         stats_label = QLabel("")
         stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        stats_label.setFont(stats_font)
-        stats_label.setStyleSheet("color: gray;")
+        stats_label.setFont(stats_font_)
+        stats_label.setStyleSheet(muted_label_style())
         stats_label.setMinimumHeight(14)
 
         live_label = QLabel("")
         live_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        live_label.setFont(stats_font)
-        live_label.setStyleSheet("color: #5a9bd4;")
+        live_label.setFont(stats_font_)
+        live_label.setStyleSheet(live_label_style())
         live_label.setMinimumHeight(14)
 
         capture_button = QPushButton(f"Take {title}")
@@ -289,7 +296,6 @@ class MeasurePage(QWidget):
         layout.addWidget(live_label)
         layout.addWidget(capture_button)
 
-        # Store direct references.
         if prefix == "reference_image":
             self.ref_image_label  = image_placeholder
             self.ref_stats_label  = stats_label
@@ -307,31 +313,31 @@ class MeasurePage(QWidget):
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        header_font = QFont(); header_font.setBold(True); header_font.setPointSize(10)
-        hint_font   = QFont(); hint_font.setPointSize(8)
+        h_font    = header_font(10, bold=True)
+        h_caption = hint_font(8)
 
-        # --- Material selector -------------------------
+        # Material selector
         self.material_selector = MaterialSelector()
         layout.addWidget(self.material_selector)
 
-        # --- Profile caption (populated by controller) --
+        # Profile caption (populated by controller)
         self.profile_caption = QLabel("")
-        self.profile_caption.setFont(hint_font)
-        self.profile_caption.setStyleSheet("color: gray;")
+        self.profile_caption.setFont(h_caption)
+        self.profile_caption.setStyleSheet(muted_label_style())
         layout.addWidget(self.profile_caption)
 
-        # --- Wavelength -------------------------------
+        # Wavelength
         layout.addSpacing(10)
-        wavelength_label = QLabel("Wavelength:"); wavelength_label.setFont(header_font)
+        wavelength_label = QLabel("Wavelength:"); wavelength_label.setFont(h_font)
         self.wavelength_combo = QComboBox()
         for label, value in AppConfig.WAVELENGTHS:
             self.wavelength_combo.addItem(label, value)
         layout.addWidget(wavelength_label)
         layout.addWidget(self.wavelength_combo)
 
-        # --- Frame count ------------------------------
+        # Frame count
         layout.addSpacing(10)
-        frame_count_label = QLabel("Frames per Capture:"); frame_count_label.setFont(header_font)
+        frame_count_label = QLabel("Frames per Capture:"); frame_count_label.setFont(h_font)
         self.frame_count_spinbox = QSpinBox()
         self.frame_count_spinbox.setRange(self.FRAME_COUNT_MIN, self.FRAME_COUNT_MAX)
         self.frame_count_spinbox.setValue(self.FRAME_COUNT_DEFAULT)
@@ -340,19 +346,19 @@ class MeasurePage(QWidget):
             "Recommended for calibration / MSA: 30."
         )
         frame_hint = QLabel("Higher = less noise, slower capture")
-        frame_hint.setFont(hint_font); frame_hint.setStyleSheet("color: gray;")
+        frame_hint.setFont(h_caption); frame_hint.setStyleSheet(muted_label_style())
         layout.addWidget(frame_count_label)
         layout.addWidget(self.frame_count_spinbox)
         layout.addWidget(frame_hint)
 
-        # --- Calibration-mode section -----------------
+        # Calibration mode
         layout.addSpacing(10)
         self.calibration_mode_checkbox = QCheckBox("Calibration Mode")
-        self.calibration_mode_checkbox.setFont(header_font)
+        self.calibration_mode_checkbox.setFont(h_font)
         self.calibration_mode_checkbox.setToolTip(
             "Enable to tag measurements with a known Reference Thickness\n"
             "and a Session Tag — required to fit calibration models and\n"
-            "run MSA Typ 1 validations."
+            "run MSA Type 1 validations."
         )
         layout.addWidget(self.calibration_mode_checkbox)
 
@@ -360,7 +366,7 @@ class MeasurePage(QWidget):
         cal_grid = QGridLayout(self.calibration_mode_frame)
         cal_grid.setContentsMargins(0, 5, 0, 0); cal_grid.setSpacing(8)
 
-        ref_label = QLabel("Reference:"); ref_label.setFont(header_font)
+        ref_label = QLabel("Reference:"); ref_label.setFont(h_font)
         self.reference_thickness_spin = QDoubleSpinBox()
         self.reference_thickness_spin.setRange(self.REF_NM_MIN, self.REF_NM_MAX)
         self.reference_thickness_spin.setDecimals(2)
@@ -369,15 +375,15 @@ class MeasurePage(QWidget):
         self.reference_thickness_spin.setSuffix(" nm")
         self.reference_thickness_spin.setSpecialValueText("— not set —")
 
-        session_label = QLabel("Session tag:"); session_label.setFont(header_font)
+        session_label = QLabel("Session tag:"); session_label.setFont(h_font)
         self.session_tag_field = QLineEdit()
         self.session_tag_field.setPlaceholderText("e.g. Cu_linearity_2026-04-25")
 
-        probe_label = QLabel("Probe:"); probe_label.setFont(header_font)
+        probe_label = QLabel("Probe:"); probe_label.setFont(h_font)
         self.probe_field = QLineEdit()
         self.probe_field.setPlaceholderText("e.g. Cu_P1")
 
-        run_label = QLabel("Run idx:"); run_label.setFont(header_font)
+        run_label = QLabel("Run idx:"); run_label.setFont(h_font)
         self.run_index_spin = QSpinBox()
         self.run_index_spin.setRange(0, 10_000)
         self.run_index_spin.setSpecialValueText("— auto —")
@@ -399,10 +405,10 @@ class MeasurePage(QWidget):
         layout.addWidget(self.calibration_mode_frame)
         self.calibration_mode_frame.setVisible(False)
 
-        # --- Batch mode --------------------------------
+        # Batch mode
         layout.addSpacing(8)
         self.batch_mode_checkbox = QCheckBox("Batch Mode")
-        self.batch_mode_checkbox.setFont(header_font)
+        self.batch_mode_checkbox.setFont(h_font)
         self.batch_mode_checkbox.setToolTip(
             "Hold reference and metadata constant; each Sample capture\n"
             "auto-saves and auto-increments the Run index."
@@ -413,14 +419,14 @@ class MeasurePage(QWidget):
         batch_grid = QGridLayout(self.batch_frame)
         batch_grid.setContentsMargins(0, 5, 0, 0); batch_grid.setSpacing(8)
 
-        runs_label = QLabel("Runs per probe:"); runs_label.setFont(header_font)
+        runs_label = QLabel("Runs per probe:"); runs_label.setFont(h_font)
         self.batch_runs_spin = QSpinBox()
         self.batch_runs_spin.setRange(self.BATCH_RUNS_MIN, self.BATCH_RUNS_MAX)
         self.batch_runs_spin.setValue(self.BATCH_RUNS_DEFAULT)
 
         self.batch_progress_label = QLabel("Batch inactive")
-        self.batch_progress_label.setFont(hint_font)
-        self.batch_progress_label.setStyleSheet("color: gray;")
+        self.batch_progress_label.setFont(h_caption)
+        self.batch_progress_label.setStyleSheet(muted_label_style())
 
         batch_grid.addWidget(runs_label,                0, 0)
         batch_grid.addWidget(self.batch_runs_spin,      0, 1)
@@ -430,7 +436,7 @@ class MeasurePage(QWidget):
         layout.addWidget(self.batch_frame)
         self.batch_frame.setVisible(False)
 
-        # --- Keep reference lock -----------------------
+        # Keep-reference lock
         layout.addSpacing(4)
         self.keep_reference_checkbox = QCheckBox("Keep reference on reset")
         self.keep_reference_checkbox.setToolTip(
@@ -439,13 +445,13 @@ class MeasurePage(QWidget):
         )
         layout.addWidget(self.keep_reference_checkbox)
 
-        # --- Name -------------------------------------
+        # Name
         layout.addSpacing(10)
         self.name_field = QLineEdit()
         self.name_field.setPlaceholderText("Guest")
         self.name_field.setEnabled(False)
         self.use_name_checkbox = QCheckBox("Name:")
-        self.use_name_checkbox.setFont(header_font)
+        self.use_name_checkbox.setFont(h_font)
         self.use_name_checkbox.toggled.connect(self.name_field.setEnabled)
 
         name_row = QHBoxLayout()
@@ -453,16 +459,16 @@ class MeasurePage(QWidget):
         name_row.addWidget(self.name_field)
         layout.addLayout(name_row)
 
-        # --- Save checkbox ----------------------------
+        # Save checkbox
         layout.addSpacing(8)
         self.save_measurement_checkbox = QCheckBox("Save Measurement?")
         self.save_measurement_checkbox.setChecked(True)
-        self.save_measurement_checkbox.setFont(header_font)
+        self.save_measurement_checkbox.setFont(h_font)
         layout.addWidget(self.save_measurement_checkbox)
 
-        # --- Note -------------------------------------
+        # Note
         layout.addSpacing(8)
-        note_label = QLabel("Note:"); note_label.setFont(header_font)
+        note_label = QLabel("Note:"); note_label.setFont(h_font)
         self.note_field = QLineEdit()
         self.note_field.setPlaceholderText("Optional note...")
         layout.addWidget(note_label)
@@ -470,15 +476,16 @@ class MeasurePage(QWidget):
 
         layout.addStretch(1)
 
-        # --- Buttons ----------------------------------
+        # Action buttons
         button_row = QHBoxLayout()
-        large_style = "font-size: 12pt;"
 
         self.reset_button = QPushButton("Reset")
-        self.reset_button.setStyleSheet(large_style)
+        self.reset_button.setMinimumHeight(34)
 
         self.calculate_button = QPushButton("Calculate")
-        self.calculate_button.setStyleSheet(f"{large_style} font-weight: bold;")
+        self.calculate_button.setMinimumHeight(34)
+        calc_font = QFont(); calc_font.setBold(True)
+        self.calculate_button.setFont(calc_font)
         self.calculate_button.setEnabled(False)
 
         button_row.addStretch(1)
@@ -494,9 +501,7 @@ class MeasurePage(QWidget):
 
         self.result_label = QLabel("Result...")
         self.result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        result_font = QFont(); result_font.setBold(True); result_font.setPointSize(18)
-        self.result_label.setFont(result_font)
+        self.result_label.setFont(title_font(18, bold=True))
         layout.addWidget(self.result_label)
         return frame
 
@@ -510,7 +515,6 @@ class MeasurePage(QWidget):
         self.mat_image_button.clicked.connect(self._on_sample_button_clicked)
         self.reset_button.clicked.connect(self.reset_requested.emit)
 
-        # Config-change signals
         self.material_selector.selection_changed.connect(self._on_material_changed)
         self.material_selector.selection_changed.connect(
             lambda _: self.config_changed.emit()
@@ -526,12 +530,10 @@ class MeasurePage(QWidget):
         self.save_measurement_checkbox.toggled.connect(self.config_changed.emit)
         self.note_field.textChanged.connect(self.config_changed.emit)
 
-        # Section toggles
         self.calibration_mode_checkbox.toggled.connect(self._on_calibration_mode_toggled)
         self.batch_mode_checkbox.toggled.connect(self._on_batch_mode_toggled)
 
     def _wire_shortcuts(self):
-        """R = reference, S = sample, Enter = calculate, Ctrl+S = toggle save."""
         def make_shortcut(seq: str, slot):
             sc = QShortcut(QKeySequence(seq), self)
             sc.setContext(Qt.ShortcutContext.WindowShortcut)
@@ -557,7 +559,6 @@ class MeasurePage(QWidget):
         self.material_changed.emit(path)
 
     def _on_sample_button_clicked(self):
-        """In batch mode, a sample capture runs through the batch flow."""
         if self._batch_active:
             self.batch_sample_requested.emit()
         else:
@@ -566,8 +567,6 @@ class MeasurePage(QWidget):
     def _on_calibration_mode_toggled(self, enabled: bool):
         self.calibration_mode_frame.setVisible(enabled)
         if not enabled:
-            # Clear the fields so disabled + non-zero values don't
-            # accidentally tag a later measurement.
             for w in (
                 self.reference_thickness_spin, self.session_tag_field,
                 self.probe_field, self.run_index_spin,
@@ -582,13 +581,11 @@ class MeasurePage(QWidget):
                 self.probe_field, self.run_index_spin,
             ):
                 w.blockSignals(False)
-            # Batch mode requires calibration mode — disable it too.
             if self.batch_mode_checkbox.isChecked():
                 self.batch_mode_checkbox.setChecked(False)
         self.config_changed.emit()
 
     def _on_batch_mode_toggled(self, enabled: bool):
-        """Batch mode requires calibration mode to provide probe/session/ref."""
         if enabled and not self.calibration_mode_checkbox.isChecked():
             self.show_info_bar(
                 "Enable Calibration Mode",
@@ -608,7 +605,7 @@ class MeasurePage(QWidget):
             self.batch_progress_label.setText("Batch inactive")
 
     # ==================================================================
-    # Public API used by MainController
+    # Public API
     # ==================================================================
 
     def get_frame_count(self) -> int:
@@ -666,24 +663,13 @@ class MeasurePage(QWidget):
         stats_label.setText(self._format_capture_stats(capture))
 
     def set_live_gray(self, ref_gray: float | None, mat_gray: float | None):
-        """
-        Update the per-preview live gray readout (used by the controller's
-        2 Hz timer while the operator aligns the probe).
-        """
-        if ref_gray is not None:
-            self.ref_live_label.setText(f"live μ={ref_gray:.2f}")
-        else:
-            self.ref_live_label.setText("")
-        if mat_gray is not None:
-            self.mat_live_label.setText(f"live μ={mat_gray:.2f}")
-        else:
-            self.mat_live_label.setText("")
+        self.ref_live_label.setText(f"live μ={ref_gray:.2f}" if ref_gray is not None else "")
+        self.mat_live_label.setText(f"live μ={mat_gray:.2f}" if mat_gray is not None else "")
 
     def set_profile_caption(self, text: str):
         self.profile_caption.setText(text)
 
     def set_reference_thickness_hint(self, lo: float | None, hi: float | None):
-        """Update the Reference-Thickness range hint based on the profile."""
         if lo is None or hi is None:
             self.reference_thickness_spin.setToolTip(
                 "Known true thickness of the sample, in nanometres.\n"
@@ -695,7 +681,7 @@ class MeasurePage(QWidget):
             f"Expected range for this material: {lo:g} – {hi:g} nm."
         )
 
-    # -- Batch-mode API -----------------------------------------------
+    # -- Batch-mode API ----------------------------------------------------
 
     def batch_is_active(self) -> bool:
         return self._batch_active
@@ -706,7 +692,6 @@ class MeasurePage(QWidget):
         self._batch_total_runs  = total_runs
 
     def batch_advance(self):
-        """Bump the run counter after a successful sample save."""
         self._batch_current_run += 1
         self.run_index_spin.setValue(self._batch_current_run)
         probe = self.probe_field.text().strip() or "—"
@@ -729,35 +714,25 @@ class MeasurePage(QWidget):
     def batch_total_runs(self) -> int:
         return self._batch_total_runs
 
-    # -- Reset / state -----------------------------------------------
+    # -- Reset / state -----------------------------------------------------
 
     def reset_all(self):
-        """
-        Full reset. If the "Keep reference on reset" checkbox is set,
-        the reference capture and its preview are preserved.
-        """
         keep_ref = self.keep_reference_checkbox.isChecked()
+        preview_style = image_preview_style()
 
         if not keep_ref:
             self.reference_capture = None
             self.ref_image_label.clear()
             self.ref_image_label.setText("Image Preview")
-            self.ref_image_label.setStyleSheet(
-                "background-color: #2E2E2E; color: white; border: 1px solid #555;"
-            )
+            self.ref_image_label.setStyleSheet(preview_style)
             self.ref_stats_label.setText("")
 
-        # Always clear the sample preview.
         self.material_capture = None
         self.mat_image_label.clear()
         self.mat_image_label.setText("Image Preview")
-        self.mat_image_label.setStyleSheet(
-            "background-color: #2E2E2E; color: white; border: 1px solid #555;"
-        )
+        self.mat_image_label.setStyleSheet(preview_style)
         self.mat_stats_label.setText("")
 
-        # In batch mode we preserve session metadata too — a reset
-        # between sample captures is common and must not wipe probe/tag.
         if not self._batch_active and not keep_ref:
             widgets_to_block = (
                 self.wavelength_combo, self.frame_count_spinbox,

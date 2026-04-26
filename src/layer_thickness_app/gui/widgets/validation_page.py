@@ -1,13 +1,7 @@
 """
-Validation Page — runs MSA Typ 1 on a repeated-measurement series and
-compares raw vs. corrected thickness output.
-
-Step 8 changes
---------------
-• After a successful "Run MSA Typ 1", the study state is kept so the
-  user can click "Export Report…" and dump a timestamped ZIP containing
-  summary.txt + msa_raw.csv + msa_corrected.csv + measurements.csv
-  + calibration.csv.
+Validation page -- runs MSA Type 1 on a repeated-measurement series and
+compares raw vs. corrected thickness output. After a successful run the
+study state is kept so the user can dump a timestamped ZIP report.
 """
 
 from __future__ import annotations
@@ -33,12 +27,18 @@ from layer_thickness_app.services.calibration_service import (
 )
 from layer_thickness_app.services.msa_service         import MSAService, MSAReport
 from layer_thickness_app.services.report_service      import ReportService
+from layer_thickness_app.gui.theme import (
+    card_style, borderless_style, status_label_style,
+    COLOR_SUCCESS, COLOR_WARN, COLOR_ERROR,
+)
 
 logger = logging.getLogger(__name__)
 
+_PANEL_OBJECT_NAME = "validation_report_panel"
+
 
 class ValidationPage(QWidget):
-    """MSA Typ 1 validation / before-after comparison page."""
+    """MSA Type 1 validation / before-after comparison."""
 
     def __init__(
         self,
@@ -55,13 +55,12 @@ class ValidationPage(QWidget):
         self.msa_service         = msa_service
         self.report_service      = ReportService()
 
-        # State kept between "Run" and "Export"
-        self._rows:             list[dict[str, Any]]       = []
-        self._models:           list[CalibrationModel | None] = []
-        self._last_raw:         MSAReport | None          = None
-        self._last_corrected:   MSAReport | None          = None
-        self._last_model:       CalibrationModel | None   = None
-        self._last_material:    str                       = ""
+        self._rows:           list[dict[str, Any]]          = []
+        self._models:         list[CalibrationModel | None] = []
+        self._last_raw:       MSAReport | None              = None
+        self._last_corrected: MSAReport | None              = None
+        self._last_model:     CalibrationModel | None       = None
+        self._last_material:  str                           = ""
 
         self._build_ui()
         self._connect_signals()
@@ -76,31 +75,31 @@ class ValidationPage(QWidget):
         root.setContentsMargins(40, 20, 40, 20)
         root.setSpacing(15)
 
-        root.addWidget(SubtitleLabel("Validation — MSA Typ 1 (raw vs. corrected)"))
+        root.addWidget(SubtitleLabel("Validation -- MSA Type 1 (raw vs. corrected)"))
 
-        # ---- Material + reference filter bar ------------------------
+        # Filter bar
         filter_bar = QHBoxLayout()
         filter_bar.setSpacing(10)
 
-        self.book_combo = ComboBox(self); self.book_combo.setPlaceholderText("Book")
-        self.page_combo = ComboBox(self); self.page_combo.setPlaceholderText("Page")
-        self.wave_combo = ComboBox(self)
+        self.book_combo      = ComboBox(self); self.book_combo.setPlaceholderText("Book")
+        self.page_combo      = ComboBox(self); self.page_combo.setPlaceholderText("Page")
+        self.wave_combo      = ComboBox(self)
         self.wave_combo.addItem("Red (635 nm)",   0.635)
         self.wave_combo.addItem("Green (532 nm)", 0.532)
-        self.mode_combo    = ComboBox(self); self.mode_combo.addItems(["multi", "single"])
-        self.session_combo = ComboBox(self); self.session_combo.setPlaceholderText("Any session")
+        self.mode_combo      = ComboBox(self); self.mode_combo.addItems(["multi", "single"])
+        self.session_combo   = ComboBox(self); self.session_combo.setPlaceholderText("Any session")
         self.reference_combo = ComboBox(self); self.reference_combo.setPlaceholderText("Reference (nm)")
 
         self.load_button = PushButton("Load Measurements", self)
         self.load_button.setIcon(FluentIcon.SYNC)
 
         for label, widget in (
-            ("Book:",        self.book_combo),
-            ("Page:",        self.page_combo),
-            ("Wavelength:",  self.wave_combo),
-            ("Mode:",        self.mode_combo),
-            ("Session:",     self.session_combo),
-            ("Reference:",   self.reference_combo),
+            ("Book:",       self.book_combo),
+            ("Page:",       self.page_combo),
+            ("Wavelength:", self.wave_combo),
+            ("Mode:",       self.mode_combo),
+            ("Session:",    self.session_combo),
+            ("Reference:",  self.reference_combo),
         ):
             filter_bar.addWidget(BodyLabel(label))
             filter_bar.addWidget(widget)
@@ -109,7 +108,7 @@ class ValidationPage(QWidget):
         filter_bar.addWidget(self.load_button)
         root.addLayout(filter_bar)
 
-        # ---- Model + tolerance + run row ----------------------------
+        # Model + tolerance + run row
         config_bar = QHBoxLayout()
         config_bar.setSpacing(10)
 
@@ -121,16 +120,15 @@ class ValidationPage(QWidget):
         self.tolerance_spin.setRange(0.1, 10_000.0)
         self.tolerance_spin.setDecimals(2)
         self.tolerance_spin.setSingleStep(5.0)
-        self.tolerance_spin.setValue(130.0)
+        self.tolerance_spin.setValue(60.0)
         self.tolerance_spin.setSuffix(" nm")
         self.tolerance_spin.setToolTip(
-            "Total tolerance band Tol.\n"
-            "BA1/Burkhardt used ±65 nm ⇒ Tol = 130 nm."
+            "Total tolerance band Tol used by the MSA Type 1 study."
         )
 
         self.rows_loaded_label = CaptionLabel("Rows loaded: 0", self)
 
-        self.run_button    = PrimaryPushButton("Run MSA Typ 1", self)
+        self.run_button    = PrimaryPushButton("Run MSA Type 1", self)
         self.export_button = PushButton("Export Report…", self)
         self.export_button.setIcon(FluentIcon.DOWNLOAD)
         self.run_button.setEnabled(False)
@@ -148,7 +146,7 @@ class ValidationPage(QWidget):
         config_bar.addWidget(self.run_button)
         root.addLayout(config_bar)
 
-        # ---- Report panels ------------------------------------------
+        # Report panels
         report_row = QHBoxLayout()
         report_row.setSpacing(20)
 
@@ -159,29 +157,26 @@ class ValidationPage(QWidget):
         report_row.addWidget(self.corrected_panel, 1)
         root.addLayout(report_row, 1)
 
-        # ---- Verdict banner -----------------------------------------
+        # Verdict banner
         self.verdict_label = SubtitleLabel("—")
         self.verdict_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.verdict_label)
 
     def _build_report_panel(self, title: str) -> QFrame:
         frame = QFrame(self)
-        frame.setStyleSheet(
-            "QFrame { background-color: transparent;"
-            "border: 1px solid rgba(128,128,128,0.25); border-radius: 8px; }"
-        )
+        frame.setObjectName(_PANEL_OBJECT_NAME)
+        frame.setStyleSheet(card_style(_PANEL_OBJECT_NAME))
         outer = QVBoxLayout(frame)
         outer.setContentsMargins(20, 15, 20, 15)
         outer.setSpacing(10)
 
         title_lbl = SubtitleLabel(title)
-        title_lbl.setStyleSheet("border: none;")
         outer.addWidget(title_lbl)
 
         form = QFormLayout()
         form.setSpacing(8)
 
-        labels = {
+        labels: dict[str, BodyLabel] = {
             "n":      BodyLabel("—"),
             "mean":   BodyLabel("—"),
             "std":    BodyLabel("—"),
@@ -190,16 +185,14 @@ class ValidationPage(QWidget):
             "cgk":    BodyLabel("—"),
             "status": BodyLabel("—"),
         }
-        for lbl in labels.values():
-            lbl.setStyleSheet("border: none;")
 
-        form.addRow(_plain_strong("n:"),        labels["n"])
-        form.addRow(_plain_strong("Mean (x̄):"), labels["mean"])
-        form.addRow(_plain_strong("Std (s):"),   labels["std"])
-        form.addRow(_plain_strong("Bias:"),     labels["bias"])
-        form.addRow(_plain_strong("Cg:"),        labels["cg"])
-        form.addRow(_plain_strong("Cgk:"),       labels["cgk"])
-        form.addRow(_plain_strong("Capable?:"),  labels["status"])
+        form.addRow(StrongBodyLabel("n:"),         labels["n"])
+        form.addRow(StrongBodyLabel("Mean (x̄):"), labels["mean"])
+        form.addRow(StrongBodyLabel("Std (s):"),   labels["std"])
+        form.addRow(StrongBodyLabel("Bias:"),      labels["bias"])
+        form.addRow(StrongBodyLabel("Cg:"),        labels["cg"])
+        form.addRow(StrongBodyLabel("Cgk:"),       labels["cgk"])
+        form.addRow(StrongBodyLabel("Capable?:"),  labels["status"])
 
         outer.addLayout(form)
         frame.labels = labels
@@ -246,15 +239,11 @@ class ValidationPage(QWidget):
         if not book:
             self.page_combo.clear(); self.reference_combo.clear(); return
 
-        pages: set[str] = set()
-        rows = self.db_service.get_all_filtered_measurements(book=book)
-        for r in rows:
-            if r.get("Page"):
-                pages.add(r["Page"])
+        pages = self.db_service.get_pages_for_book(book)
 
         self.page_combo.blockSignals(True)
         self.page_combo.clear()
-        self.page_combo.addItems(sorted(pages))
+        self.page_combo.addItems(pages)
         self.page_combo.setCurrentIndex(-1)
         self.page_combo.blockSignals(False)
 
@@ -272,6 +261,8 @@ class ValidationPage(QWidget):
 
         candidates = self.db_service.get_calibration_rows(
             book=book, page=page, session_tag=session,
+            wavelength_um=float(wavelength) if wavelength is not None else None,
+            mode=mode,
         )
         refs = sorted({r["ReferenceThickness"] for r in candidates
                        if r.get("ReferenceThickness") is not None})
@@ -288,32 +279,26 @@ class ValidationPage(QWidget):
 
         rows = self.db_service.get_msa_rows(
             book=book, page=page, reference_nm=float(ref_value),
-            session_tag=session, tolerance=0.5,
+            session_tag=session,
+            wavelength_um=float(wavelength) if wavelength is not None else None,
+            mode=mode,
+            tolerance=0.5,
         )
+        rows = [r for r in rows if r.get("Layer") is not None]
 
-        filtered: list[dict[str, Any]] = []
-        for r in rows:
-            if wavelength is not None and r.get("Wavelength") not in (None, wavelength):
-                continue
-            if mode and r.get("Mode") and r["Mode"] != mode:
-                continue
-            if r.get("Layer") is None:
-                continue
-            filtered.append(r)
-
-        self._rows = filtered
-        self.rows_loaded_label.setText(f"Rows loaded: {len(filtered)}")
+        self._rows = rows
+        self.rows_loaded_label.setText(f"Rows loaded: {len(rows)}")
 
         self._populate_model_combo(book=book, page=page,
                                    wavelength=wavelength, mode=mode)
 
-        enough = len(filtered) >= self.msa_service.MIN_N
+        enough = len(rows) >= self.msa_service.MIN_N
         self.run_button.setEnabled(enough)
         self.export_button.setEnabled(False)
         if not enough:
             self._toast(
-                f"Need at least {self.msa_service.MIN_N} measurements for MSA Typ 1 "
-                f"(got {len(filtered)}).",
+                f"Need at least {self.msa_service.MIN_N} measurements for MSA Type 1 "
+                f"(got {len(rows)}).",
                 is_warning=True,
             )
         self._clear_report_panels()
@@ -322,10 +307,7 @@ class ValidationPage(QWidget):
         self, book: str, page: str,
         wavelength: float | None, mode: str | None,
     ) -> None:
-        shelf = ""
-        any_rows = self.db_service.get_all_filtered_measurements(book=book, page=page)
-        if any_rows:
-            shelf = any_rows[0].get("Shelf", "") or ""
+        shelf = self.db_service.get_shelf_for_book_page(book, page) or ""
 
         active = self.calibration_service.load_active(
             shelf=shelf, book=book, page=page,
@@ -359,10 +341,7 @@ class ValidationPage(QWidget):
             self.model_combo.addItem(m.summary(), m.id)
             self._models.append(m)
 
-        if self.model_combo.count() > 1:
-            self.model_combo.setCurrentIndex(1)
-        else:
-            self.model_combo.setCurrentIndex(0)
+        self.model_combo.setCurrentIndex(1 if self.model_combo.count() > 1 else 0)
         self.model_combo.blockSignals(False)
 
     # ==================================================================
@@ -427,7 +406,6 @@ class ValidationPage(QWidget):
         self.export_button.setEnabled(True)
 
     def _on_export(self) -> None:
-        """Exports the current study to a user-chosen directory."""
         if self._last_raw is None:
             self._toast("Run a study before exporting.", is_warning=True); return
 
@@ -458,13 +436,13 @@ class ValidationPage(QWidget):
         if zip_path:
             self._toast(f"Exported: {zip_path}", duration=5000)
         else:
-            self._toast("Export failed — see log for details.", is_error=True)
+            self._toast("Export failed -- see log for details.", is_error=True)
 
     def _material_label(self, suffix: str) -> str:
         parts = [
             self.book_combo.currentText() or "?",
             self.page_combo.currentText() or "?",
-            f"{self.wave_combo.currentData()} µm",
+            f"{self.wave_combo.currentData()} um",
             self.mode_combo.currentText() or "?",
         ]
         label = " / ".join(parts)
@@ -473,6 +451,10 @@ class ValidationPage(QWidget):
     # ==================================================================
     # Panel rendering
     # ==================================================================
+
+    @staticmethod
+    def _strong_color_style(color: str) -> str:
+        return f"{borderless_style()} font-weight: bold; color: {color};"
 
     def _render_report(self, panel: QFrame, report: MSAReport) -> None:
         labels = panel.labels
@@ -483,29 +465,23 @@ class ValidationPage(QWidget):
         labels["cg"].setText(f"{report.cg:.3f}")
         labels["cgk"].setText(f"{report.cgk:.3f}")
 
-        labels["cg"].setStyleSheet(
-            "border: none; font-weight: bold; "
-            f"color: {'#00b050' if report.cg_capable else '#e04141'};"
-        )
-        labels["cgk"].setStyleSheet(
-            "border: none; font-weight: bold; "
-            f"color: {'#00b050' if report.cgk_capable else '#e04141'};"
-        )
+        labels["cg"].setStyleSheet(self._strong_color_style(
+            COLOR_SUCCESS if report.cg_capable else COLOR_ERROR
+        ))
+        labels["cgk"].setStyleSheet(self._strong_color_style(
+            COLOR_SUCCESS if report.cgk_capable else COLOR_ERROR
+        ))
         if report.is_capable:
             labels["status"].setText("CAPABLE ✓")
-            labels["status"].setStyleSheet(
-                "border: none; font-weight: bold; color: #00b050;"
-            )
+            labels["status"].setStyleSheet(self._strong_color_style(COLOR_SUCCESS))
         else:
             labels["status"].setText("NOT CAPABLE ✗")
-            labels["status"].setStyleSheet(
-                "border: none; font-weight: bold; color: #e04141;"
-            )
+            labels["status"].setStyleSheet(self._strong_color_style(COLOR_ERROR))
 
     def _render_empty(self, panel: QFrame) -> None:
         for lbl in panel.labels.values():
             lbl.setText("—")
-            lbl.setStyleSheet("border: none;")
+            lbl.setStyleSheet(borderless_style())
 
     def _clear_report_panels(self) -> None:
         self._render_empty(self.raw_panel)
@@ -521,25 +497,25 @@ class ValidationPage(QWidget):
             verdict = ("System is " +
                        ("CAPABLE ✓" if raw.is_capable else "NOT CAPABLE ✗")
                        + f" (Cgk={raw.cgk:.3f})")
-            color = "#00b050" if raw.is_capable else "#e04141"
+            color = COLOR_SUCCESS if raw.is_capable else COLOR_ERROR
         else:
             improvement = corrected.cgk - raw.cgk
             arrow = "↑" if improvement > 0 else ("↓" if improvement < 0 else "=")
             if corrected.is_capable and not raw.is_capable:
-                headline = "Calibration made the system CAPABLE ✓"; color = "#00b050"
+                headline = "Calibration made the system CAPABLE ✓";   color = COLOR_SUCCESS
             elif corrected.is_capable and raw.is_capable:
-                headline = "System capable before and after.";      color = "#00b050"
+                headline = "System capable before and after.";        color = COLOR_SUCCESS
             elif not corrected.is_capable and raw.is_capable:
-                headline = "Warning: correction REDUCED capability."; color = "#e0a500"
+                headline = "Warning: correction REDUCED capability."; color = COLOR_WARN
             else:
-                headline = "System still NOT capable.";             color = "#e04141"
+                headline = "System still NOT capable.";               color = COLOR_ERROR
             verdict = (
                 f"{headline}  "
                 f"Cgk {raw.cgk:.3f} {arrow} {corrected.cgk:.3f}  "
                 f"(Δbias {raw.bias:+.3f} → {corrected.bias:+.3f} nm)"
             )
         self.verdict_label.setText(verdict)
-        self.verdict_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        self.verdict_label.setStyleSheet(self._strong_color_style(color))
 
     # ==================================================================
     # Public hooks
@@ -561,9 +537,3 @@ class ValidationPage(QWidget):
         else:
             InfoBar.success(title="OK", content=message, duration=duration,
                             parent=self, position=InfoBarPosition.TOP)
-
-
-def _plain_strong(text: str) -> StrongBodyLabel:
-    lbl = StrongBodyLabel(text)
-    lbl.setStyleSheet("border: none;")
-    return lbl

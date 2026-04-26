@@ -1,9 +1,13 @@
+"""
+Export filtered measurement rows (and their referenced images) to a
+timestamped ZIP archive.
+"""
+
 from __future__ import annotations
 
 import csv
 import datetime
 import logging
-import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -15,9 +19,8 @@ from layer_thickness_app.services.database_service import (
 
 logger = logging.getLogger(__name__)
 
-# Export column order — 'id' is dropped, otherwise we follow this
-# readable order. Any future column added to VALID_COLUMNS that is not
-# listed here gets appended automatically so nothing is silently lost.
+# Export column order. 'id' is dropped; anything missing from this list
+# is appended after VALID_COLUMNS so future additions don't get lost.
 _PREFERRED_ORDER: tuple[str, ...] = (
     "Date", "Name",
     "Layer", "ThicknessCorrected", "ReferenceThickness",
@@ -35,9 +38,10 @@ class ExportService:
     """
     Exports measurement data to a timestamped ZIP archive.
 
-    The archive contains measurements.csv (with img/-relative paths) and
-    an img/ folder with the .png files. Stored filenames are preserved
-    so that an export/import round-trip is byte-identical.
+    The archive contains ``measurements.csv`` (with ``img/``-relative paths)
+    and an ``img/`` folder with the referenced .png files. Stored
+    filenames are preserved so an export/import round-trip is
+    byte-identical.
     """
 
     def __init__(self, db_service: DatabaseService):
@@ -46,7 +50,7 @@ class ExportService:
 
     def export_to_zip(
         self,
-        export_dir:  str,
+        export_dir:  str | Path,
         name_filter: str | None = None,
         start_date:  str | None = None,
         end_date:    str | None = None,
@@ -57,9 +61,7 @@ class ExportService:
         session_tag: str | None = None,
         probe:       str | None = None,
     ) -> str:
-        """
-        Returns the path to the generated ZIP, or "" on failure / no data.
-        """
+        """Returns the path to the generated ZIP, or "" on failure / no data."""
         logger.info("Starting data export to ZIP...")
 
         data = self.db_service.get_all_filtered_measurements(
@@ -71,14 +73,15 @@ class ExportService:
             logger.info("No data found matching filters to export.")
             return ""
 
-        temp_dir = tempfile.mkdtemp()
-        img_dir  = os.path.join(temp_dir, "img")
-        csv_path = os.path.join(temp_dir, "measurements.csv")
+        export_dir = Path(export_dir)
+        temp_dir   = Path(tempfile.mkdtemp())
+        img_dir    = temp_dir / "img"
+        csv_path   = temp_dir / "measurements.csv"
 
         try:
-            os.makedirs(img_dir, exist_ok=True)
+            img_dir.mkdir(parents=True, exist_ok=True)
 
-            # Copy images preserving the stored filenames
+            # Copy images preserving the stored filenames.
             for row in data:
                 for db_key in ("RefImage", "MatImage"):
                     filename = row.get(db_key)
@@ -88,27 +91,26 @@ class ExportService:
                     if not src.exists():
                         logger.warning("Source image not found, skipping: %s", src)
                         continue
-                    shutil.copy(src, os.path.join(img_dir, filename))
+                    shutil.copy(src, img_dir / filename)
                 # Rewrite the path fields to be ZIP-relative.
                 if row.get("RefImage"):
                     row["RefImage"] = f"img/{row['RefImage']}"
                 if row.get("MatImage"):
                     row["MatImage"] = f"img/{row['MatImage']}"
 
-            # Build header from VALID_COLUMNS (stable, not first-row-dependent)
             export_headers = self._build_header()
 
-            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            with csv_path.open("w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(
-                    f, fieldnames=export_headers, extrasaction="ignore"
+                    f, fieldnames=export_headers, extrasaction="ignore",
                 )
                 writer.writeheader()
                 writer.writerows(data)
 
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            zip_base_path = os.path.join(export_dir, f"measurements_export_{timestamp}")
+            timestamp     = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            zip_base_path = export_dir / f"measurements_export_{timestamp}"
             zip_filepath  = shutil.make_archive(
-                base_name=zip_base_path, format="zip", root_dir=temp_dir,
+                base_name=str(zip_base_path), format="zip", root_dir=str(temp_dir),
             )
 
             logger.info("Successfully exported %d rows to %s", len(data), zip_filepath)
@@ -121,7 +123,7 @@ class ExportService:
             try:
                 shutil.rmtree(temp_dir)
                 logger.debug("Cleaned up temp directory: %s", temp_dir)
-            except Exception as e:
+            except OSError as e:
                 logger.warning("Error cleaning up temp directory %s: %s", temp_dir, e)
 
     # ------------------------------------------------------------------

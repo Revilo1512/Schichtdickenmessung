@@ -1,27 +1,17 @@
 """
 Linear regression correction for transmission-based thickness measurements.
 
-The Beer-Lambert model in calculation_service.py ignores reflection losses
-at the metal surface and other systematic biases specific to the optical
-path. Rather than modelling reflection physically (which would require
-the complex refractive index and Fresnel equations for each substrate),
-this module provides an empirical correction:
+The Beer-Lambert calculation in ``calculation_service.py`` ignores
+reflection losses at the metal surface and other systematic biases of
+the optical path. This module provides an empirical correction:
 
-    y = β₁ · x + β₀
+    y = beta_1 * x + beta_0
 
 where x is the raw Beer-Lambert output and y is the known reference
-thickness. The fit is done once per material (+wavelength +mode) from a
-batch of calibration samples whose true thickness is known from a
-reference method. The fitted model is persisted and applied at
-measurement time to produce `ThicknessCorrected`.
-
-This module provides:
-  * `CalibrationModel` — immutable container for a fitted model.
-  * `CalibrationService.fit(...)` — least-squares fit + R² computation.
-  * `CalibrationService.split_*` — train / test splits for validation.
-  * `CalibrationService.evaluate(...)` — before/after metrics against a
-    held-out test set (bias, MAE, RMSE).
-  * `CalibrationService.save / load / load_active` — DB persistence.
+thickness. The fit is run once per (material, wavelength, mode) from a
+batch of calibration samples whose true thickness is known. The fitted
+model is persisted and applied at measurement time to produce
+``ThicknessCorrected``.
 """
 
 from __future__ import annotations
@@ -39,17 +29,15 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Immutable result types
-# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class CalibrationModel:
     """
-    Fitted linear correction model: y = slope * x + intercept.
+    Fitted linear correction: y = slope * x + intercept.
 
-    The model is only valid for the exact (shelf, book, page, wavelength,
-    mode) combination it was fitted on — multi-frame and single-frame
-    have different noise characteristics and need separate calibrations.
+    A model is only valid for the exact (shelf, book, page, wavelength,
+    mode) tuple it was fitted on; multi-frame and single-frame have
+    different noise characteristics and need separate calibrations.
     """
     slope:         float
     intercept:     float
@@ -74,31 +62,23 @@ class CalibrationModel:
         return self.slope * x + self.intercept
 
     def is_in_range(self, x: float, tolerance: float = 5.0) -> bool:
-        """True if *x* is inside the calibration data range (± tolerance nm)."""
         return (self.min_ref_nm - tolerance) <= x <= (self.max_ref_nm + tolerance)
 
     def summary(self) -> str:
         return (
-            f"{self.book}/{self.page} @ {self.wavelength_um} µm "
-            f"[{self.mode}] — slope={self.slope:.4f}, "
-            f"intercept={self.intercept:.4f}, R²={self.r_squared:.4f}, "
+            f"{self.book}/{self.page} @ {self.wavelength_um} um "
+            f"[{self.mode}] -- slope={self.slope:.4f}, "
+            f"intercept={self.intercept:.4f}, R^2={self.r_squared:.4f}, "
             f"n={self.n_samples}"
         )
 
 
 # ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
 
 class CalibrationService:
-    """
-    Fits and applies linear correction models. Stateless — each call to
-    ``fit``, ``evaluate``, etc. returns a fresh result.
-    """
+    """Fits and applies linear correction models. Stateless."""
 
-    # Below this many points the linear fit is under-determined. Raised
-    # to 4 so that the minimum fit has at least 2 degrees of freedom
-    # for residual analysis and a more trustworthy slope.
+    # Below this many points the linear fit is under-determined.
     MIN_POINTS_FOR_FIT = 4
 
     def __init__(self, db_service: "DatabaseService | None" = None):
@@ -134,7 +114,7 @@ class CalibrationService:
             )
         if np.allclose(x, x[0]):
             raise ValueError(
-                "All measured values are identical — cannot fit a slope. "
+                "All measured values are identical -- cannot fit a slope. "
                 "Include samples with different reference thicknesses."
             )
 
@@ -178,8 +158,9 @@ class CalibrationService:
     ) -> CalibrationModel:
         """
         Pull (Layer, ReferenceThickness) pairs out of DB rows and fit.
-        Rows not matching the requested *mode* are skipped — mixing
-        single- and multi-frame data invalidates the model.
+        Rows whose Mode does not match the requested ``mode`` are
+        skipped; mixing single- and multi-frame data invalidates the
+        model.
         """
         measured:  list[float] = []
         reference: list[float] = []
@@ -218,6 +199,7 @@ class CalibrationService:
         self._require_db()
         rows = self.db_service.get_calibration_rows(
             book=book, page=page, session_tag=session_tag, probe=probe,
+            wavelength_um=wavelength_um, mode=mode,
         )
         return self.fit_from_rows(
             rows, shelf=shelf, book=book, page=page,
@@ -278,10 +260,9 @@ class CalibrationService:
         reference: list[float] | np.ndarray,
     ) -> dict[str, float]:
         """
-        Before/after metrics for *model* on a (measured, reference) test set.
-
-        Positive bias = the system reads high. A successful calibration
-        pushes mean_bias_after close to zero.
+        Before/after metrics for ``model`` against a (measured,
+        reference) test set. Positive bias means the system reads high;
+        a successful calibration drives mean_bias_after towards zero.
         """
         x = np.asarray(measured,  dtype=np.float64)
         y = np.asarray(reference, dtype=np.float64)
@@ -369,7 +350,7 @@ class CalibrationService:
     def _require_db(self) -> None:
         if self.db_service is None:
             raise RuntimeError(
-                "This operation requires a DatabaseService — pass one to "
+                "This operation requires a DatabaseService -- pass one to "
                 "CalibrationService() at construction time."
             )
 

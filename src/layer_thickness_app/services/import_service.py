@@ -1,8 +1,12 @@
+"""
+Import measurement data from a ZIP archive (produced by
+``ExportService``) back into the database.
+"""
+
 from __future__ import annotations
 
 import csv
 import logging
-import os
 import shutil
 import tempfile
 import zipfile
@@ -19,23 +23,22 @@ logger = logging.getLogger(__name__)
 
 class ImportService:
     """
-    Imports measurement data from a ZIP archive into the DatabaseService.
+    Imports measurement data from a ZIP archive.
 
-    The ZIP archive is expected to contain:
-      - measurements.csv
-      - img/ — the referenced image files
+    Expected archive layout:
+      - ``measurements.csv``
+      - ``img/`` containing the referenced image files
 
-    The importer preserves the original stored image filenames so that
-    an export/import round-trip is byte-identical.
+    The importer preserves the original stored image filenames so an
+    export/import round-trip is byte-identical.
     """
 
-    # Columns that MUST be present. Everything else is optional.
     REQUIRED = frozenset({
         "Layer", "RefImage", "MatImage", "Shelf", "Book", "Page",
     })
 
-    # Optional numeric columns — coerced to float/int per-column so a
-    # single bad value only loses that cell, not the whole row.
+    # Numeric optional columns — coerced per-cell so a single bad value
+    # only loses that cell, not the whole row.
     _FLOAT_COLUMNS = frozenset({
         "Wavelength", "ReferenceThickness", "ThicknessCorrected",
         "MeanGrayRef", "MeanGraySample", "StdGrayRef", "StdGraySample",
@@ -46,44 +49,42 @@ class ImportService:
 
     def __init__(self, db_service: DatabaseService):
         self.db_service     = db_service
-        # Reuse the DB-service-managed images directory instead of
-        # recomputing it from the db path.
         self.image_dir_path = self.db_service.image_dir_path
 
     # ------------------------------------------------------------------
 
-    def import_from_zip(self, zip_filepath: str) -> tuple[int, int]:
+    def import_from_zip(self, zip_filepath: str | Path) -> tuple[int, int]:
         """
-        Reads a ZIP archive, copies images to the data/images folder,
+        Reads a ZIP archive, copies images to the data/images folder
         and imports metadata into the database.
 
-        Returns (success_count, fail_count).
+        Returns ``(success_count, fail_count)``.
         """
-        logger.info("Starting import from %s", zip_filepath)
+        zip_path = Path(zip_filepath)
+        logger.info("Starting import from %s", zip_path)
         success_count = 0
         fail_count    = 0
-        temp_dir      = tempfile.mkdtemp()
+        temp_dir      = Path(tempfile.mkdtemp())
 
         try:
-            with zipfile.ZipFile(zip_filepath, "r") as zip_ref:
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 zip_ref.extractall(temp_dir)
 
-            csv_path = os.path.join(temp_dir, "measurements.csv")
-            if not os.path.exists(csv_path):
+            csv_path = temp_dir / "measurements.csv"
+            if not csv_path.exists():
                 logger.error("'measurements.csv' not found in the ZIP file.")
                 return (0, 0)
 
             csv.field_size_limit(10_485_760)
 
-            with open(csv_path, "r", newline="", encoding="utf-8") as f:
+            with csv_path.open("r", newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
 
                 if not reader.fieldnames:
                     logger.error("CSV file is empty or has no header: %s", csv_path)
                     return (0, 0)
 
-                reader_headers = set(reader.fieldnames)
-                missing = self.REQUIRED - reader_headers
+                missing = self.REQUIRED - set(reader.fieldnames)
                 if missing:
                     logger.error("CSV is missing required columns: %s", missing)
                     return (0, 0)
@@ -95,19 +96,19 @@ class ImportService:
                         fail_count += 1
 
         except FileNotFoundError:
-            logger.error("File not found at %s", zip_filepath)
+            logger.error("File not found at %s", zip_path)
             return (0, 0)
         except zipfile.BadZipFile:
-            logger.error("Bad ZIP file %s", zip_filepath)
+            logger.error("Bad ZIP file %s", zip_path)
             return (0, 0)
         except Exception as e:
-            logger.exception("Error reading ZIP file %s: %s", zip_filepath, e)
+            logger.exception("Error reading ZIP file %s: %s", zip_path, e)
             return (0, 0)
         finally:
             try:
                 shutil.rmtree(temp_dir)
                 logger.debug("Cleaned up temp directory: %s", temp_dir)
-            except Exception as e:
+            except OSError as e:
                 logger.warning("Error cleaning up temp directory %s: %s", temp_dir, e)
 
         logger.info(
@@ -118,12 +119,12 @@ class ImportService:
 
     # ------------------------------------------------------------------
 
-    def _process_row(self, i: int, row: dict[str, str], temp_dir: str) -> bool:
-        """Process one CSV row — returns True on success."""
+    def _process_row(self, i: int, row: dict[str, str], temp_dir: Path) -> bool:
+        """Process one CSV row. Returns True on success."""
         try:
             data_to_save: dict[str, Any] = {}
 
-            # --- Required: Layer must parse ---
+            # Required: Layer must parse as float.
             try:
                 data_to_save["Layer"] = float(row["Layer"])
             except (ValueError, TypeError):
@@ -133,24 +134,28 @@ class ImportService:
                 )
                 return False
 
-            # --- Required: material path ---
+            # Required: material path triple.
             for col in ("Shelf", "Book", "Page"):
                 val = row.get(col)
                 if not val:
-                    logger.warning("Row %d: missing required column '%s' — skipping row.",
-                                   i, col)
+                    logger.warning(
+                        "Row %d: missing required column '%s' — skipping row.",
+                        i, col,
+                    )
                     return False
                 data_to_save[col] = val
 
-            # --- Copy text-like optional columns through verbatim ---
-            text_optional = (VALID_COLUMNS - self.REQUIRED
-                             - self._FLOAT_COLUMNS - self._INT_COLUMNS
-                             - {"id", "RefImage", "MatImage"})
+            # Text-like optional columns pass through verbatim.
+            text_optional = (
+                VALID_COLUMNS - self.REQUIRED
+                - self._FLOAT_COLUMNS - self._INT_COLUMNS
+                - {"id", "RefImage", "MatImage"}
+            )
             for col in text_optional:
                 if col in row and row[col] != "":
                     data_to_save[col] = row[col]
 
-            # --- Coerce numeric optional columns ---
+            # Numeric optional columns — coerce per-cell.
             for col in self._FLOAT_COLUMNS:
                 raw_val = row.get(col)
                 if raw_val is None or raw_val == "":
@@ -175,39 +180,35 @@ class ImportService:
                         "column skipped.", i, col, raw_val,
                     )
 
-            # --- Copy image bytes preserving the stored filenames ---
-            ref_img_rel_path = row.get("RefImage")
-            mat_img_rel_path = row.get("MatImage")
-            if not ref_img_rel_path or not mat_img_rel_path:
+            # Image bytes — preserve the stored filenames.
+            ref_img_rel = row.get("RefImage")
+            mat_img_rel = row.get("MatImage")
+            if not ref_img_rel or not mat_img_rel:
                 logger.warning("Row %d: missing RefImage or MatImage path.", i)
                 return False
 
-            ref_img_src_path = os.path.join(temp_dir, ref_img_rel_path)
-            mat_img_src_path = os.path.join(temp_dir, mat_img_rel_path)
-            if not os.path.exists(ref_img_src_path) or not os.path.exists(mat_img_src_path):
+            ref_img_src = temp_dir / ref_img_rel
+            mat_img_src = temp_dir / mat_img_rel
+            if not ref_img_src.exists() or not mat_img_src.exists():
                 logger.warning(
-                    "Row %d: image file not found in ZIP. "
-                    "Expected %s and %s.",
-                    i, ref_img_src_path, mat_img_src_path,
+                    "Row %d: image file not found in ZIP. Expected %s and %s.",
+                    i, ref_img_src, mat_img_src,
                 )
                 return False
 
-            # The DB stores the filename only (not any "img/" prefix).
-            ref_img_name_db = os.path.basename(ref_img_rel_path)
-            mat_img_name_db = os.path.basename(mat_img_rel_path)
-
-            ref_img_dest_path = self.image_dir_path / ref_img_name_db
-            mat_img_dest_path = self.image_dir_path / mat_img_name_db
+            # The DB stores the filename only (no directory prefix).
+            ref_img_name = Path(ref_img_rel).name
+            mat_img_name = Path(mat_img_rel).name
 
             try:
-                shutil.copy(ref_img_src_path, ref_img_dest_path)
-                shutil.copy(mat_img_src_path, mat_img_dest_path)
-            except Exception as e:
+                shutil.copy(ref_img_src, self.image_dir_path / ref_img_name)
+                shutil.copy(mat_img_src, self.image_dir_path / mat_img_name)
+            except OSError as e:
                 logger.warning("Row %d: could not copy image files (%s).", i, e)
                 return False
 
-            data_to_save["RefImage"] = ref_img_name_db
-            data_to_save["MatImage"] = mat_img_name_db
+            data_to_save["RefImage"] = ref_img_name
+            data_to_save["MatImage"] = mat_img_name
 
             new_id = self.db_service.save_measurement(data_to_save)
             if new_id <= 0:

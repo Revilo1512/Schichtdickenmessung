@@ -15,28 +15,15 @@ from qfluentwidgets import (
 )
 
 from layer_thickness_app.services.database_service import DatabaseService
+from layer_thickness_app.gui.theme import muted_label_style
 
 logger = logging.getLogger(__name__)
 
 
 class HistoryPage(QWidget):
     """
-    Measurement-history browser with filtering, pagination, inline
-    editing and bulk deletion.
-
-    Step 8 changes
-    --------------
-    • Adds BA2 columns to the table: Mode, Frames, Ref (nm),
-      Corr. (nm), Session.  The layer and reference columns now display
-      together so the user can visually verify calibration data.
-    • Decouples `_load_name_suggestions()` from `_refresh_data()` — it
-      only runs when the underlying data actually changed (after a
-      delete/import, or on explicit user request).
-    • Adds inline editing via:
-        – Double-click on the Ref / Session / Note cells opens an
-          input dialog for that single row.
-        – Right-click opens a context menu with the same actions.
-      Both paths write through the DatabaseService and refresh the row.
+    Browser for the measurement history with filtering, pagination,
+    inline editing and bulk deletion.
     """
 
     data_changed = pyqtSignal()
@@ -57,7 +44,9 @@ class HistoryPage(QWidget):
     _COL_SESSION   = 12
     _COL_NOTE      = 13
 
-    # DB column name for each table column (None where there is no DB column)
+    # Map table columns to DB columns. Frames is rendered from
+    # FrameCountSample (the noise-relevant value) but uses a virtual key
+    # so _build_item formats it specially.
     _COL_DB_KEY: dict[int, str | None] = {
         _COL_ID:        "id",
         _COL_DATE:      "Date",
@@ -67,7 +56,7 @@ class HistoryPage(QWidget):
         _COL_REF:       "ReferenceThickness",
         _COL_WAVE:      "Wavelength",
         _COL_MODE:      "Mode",
-        _COL_FRAMES:    "FrameCount",
+        _COL_FRAMES:    "FrameCountSample",
         _COL_SHELF:     "Shelf",
         _COL_BOOK:      "Book",
         _COL_PAGE:      "Page",
@@ -75,20 +64,21 @@ class HistoryPage(QWidget):
         _COL_NOTE:      "Note",
     }
 
-    # User-facing labels
     _COL_LABELS = [
-        "ID",       "Date",       "Name",       "Layer (nm)",
-        "Corr. (nm)", "Ref (nm)", "λ (µm)",
-        "Mode",     "Frames",     "Shelf",      "Book",
-        "Page",     "Session",    "Note",
+        "ID",         "Date",       "Name",       "Layer (nm)",
+        "Corr. (nm)", "Ref (nm)",   "λ (µm)",
+        "Mode",       "Frames",     "Shelf",      "Book",
+        "Page",       "Session",    "Note",
     ]
+
+    # Cells that the user can edit inline.
+    _EDITABLE_COLS = frozenset({_COL_REF, _COL_SESSION, _COL_NOTE})
 
     def __init__(self, db_service: DatabaseService, parent: QWidget | None = None):
         super().__init__(parent)
         self.db_service = db_service
         self.setObjectName("HistoryPage")
 
-        # Pagination state
         self.current_page     = 1
         self.items_per_page   = 20
         self.total_items      = 0
@@ -98,7 +88,6 @@ class HistoryPage(QWidget):
         self._init_layout()
         self._connect_signals()
 
-        # Initial one-off load of filter suggestions
         self._load_name_suggestions()
         self._refresh_data()
 
@@ -116,14 +105,13 @@ class HistoryPage(QWidget):
         self.sort_order_combo = ComboBox(self)
         self.sort_order_combo.addItems(["Newest First", "Oldest First"])
 
-        self.filter_button = PrimaryPushButton("Apply Filters", self)
-        self.delete_button = ToolButton(FluentIcon.DELETE, self)
+        self.filter_button  = PrimaryPushButton("Apply Filters", self)
+        self.delete_button  = ToolButton(FluentIcon.DELETE, self)
         self.delete_button.setToolTip("Delete filtered data")
-        self.reset_button  = PushButton("Reset", self)
+        self.reset_button   = PushButton("Reset", self)
         self.refresh_button = ToolButton(FluentIcon.SYNC, self)
         self.refresh_button.setToolTip("Refresh data (reloads filter suggestions too)")
 
-        # Table
         self.table = TableWidget(self)
         self.table.setColumnCount(len(self._COL_LABELS))
         self.table.setHorizontalHeaderLabels(self._COL_LABELS)
@@ -136,7 +124,6 @@ class HistoryPage(QWidget):
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(self._COL_NOTE, QHeaderView.ResizeMode.Stretch)
 
-        # Reasonable default widths
         self.table.setColumnWidth(self._COL_ID,        50)
         self.table.setColumnWidth(self._COL_DATE,      150)
         self.table.setColumnWidth(self._COL_NAME,      100)
@@ -145,13 +132,12 @@ class HistoryPage(QWidget):
         self.table.setColumnWidth(self._COL_REF,       80)
         self.table.setColumnWidth(self._COL_WAVE,      65)
         self.table.setColumnWidth(self._COL_MODE,      60)
-        self.table.setColumnWidth(self._COL_FRAMES,   65)
-        self.table.setColumnWidth(self._COL_SHELF,    70)
-        self.table.setColumnWidth(self._COL_BOOK,     70)
-        self.table.setColumnWidth(self._COL_PAGE,     70)
-        self.table.setColumnWidth(self._COL_SESSION, 110)
+        self.table.setColumnWidth(self._COL_FRAMES,    65)
+        self.table.setColumnWidth(self._COL_SHELF,     70)
+        self.table.setColumnWidth(self._COL_BOOK,      70)
+        self.table.setColumnWidth(self._COL_PAGE,      70)
+        self.table.setColumnWidth(self._COL_SESSION,  110)
 
-        # Pagination
         self.prev_button = ToolButton(FluentIcon.LEFT_ARROW,  self)
         self.next_button = ToolButton(FluentIcon.RIGHT_ARROW, self)
         self.page_label  = CaptionLabel("Page 1 of 1", self)
@@ -185,7 +171,7 @@ class HistoryPage(QWidget):
         hint = CaptionLabel(
             "Tip: double-click a row in Ref, Session or Note to edit.", self,
         )
-        hint.setStyleSheet("color: gray;")
+        hint.setStyleSheet(muted_label_style())
 
         nav = QHBoxLayout()
         nav.addStretch(1)
@@ -209,7 +195,6 @@ class HistoryPage(QWidget):
         self.prev_button.clicked.connect(self._on_prev_page)
         self.next_button.clicked.connect(self._on_next_page)
 
-        # Inline edit
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
 
@@ -230,7 +215,6 @@ class HistoryPage(QWidget):
         self._refresh_data()
 
     def _on_full_refresh(self):
-        """Refresh button: also reload the Name combo from the DB."""
         self._load_name_suggestions()
         self._refresh_data()
 
@@ -249,11 +233,7 @@ class HistoryPage(QWidget):
     # ==================================================================
 
     def _load_name_suggestions(self):
-        """
-        Repopulates the Name filter combo.  Tries to preserve the current
-        selection.  Called only on initial load, on 'Refresh', and via
-        the external `data_changed` signal — NOT during every pagination.
-        """
+        """Repopulate the Name filter combo, preserving current selection."""
         current_name = self.name_filter.currentText()
         names = self.db_service.get_unique_names()
         self.name_filter.blockSignals(True)
@@ -276,17 +256,14 @@ class HistoryPage(QWidget):
         }
 
     def _refresh_data(self):
-        """Reloads the current page.  Does NOT reload the Name combo."""
+        """
+        Reloads the current page using the windowed-count paginated read,
+        which gives us rows + total in a single round-trip.
+        """
         filters  = self._get_current_filters()
         sort_dir = "DESC" if self.sort_order_combo.currentIndex() == 0 else "ASC"
 
-        self.total_items = self.db_service.get_measurements_count(**filters)
-        self.total_pages = max(
-            1, (self.total_items + self.items_per_page - 1) // self.items_per_page
-        )
-        self.current_page = min(self.current_page, self.total_pages)
-
-        measurements = self.db_service.get_measurements(
+        rows, total = self.db_service.get_measurements(
             **filters,
             page_num  = self.current_page,
             per_page  = self.items_per_page,
@@ -294,14 +271,19 @@ class HistoryPage(QWidget):
             order_dir = sort_dir,
         )
 
-        self._populate_table(measurements)
+        self.total_items = total
+        self.total_pages = max(
+            1, (self.total_items + self.items_per_page - 1) // self.items_per_page
+        )
+        self.current_page = min(self.current_page, self.total_pages)
+
+        self._populate_table(rows)
 
         self.page_label.setText(f"Page {self.current_page} of {self.total_pages}")
         self.prev_button.setEnabled(self.current_page > 1)
         self.next_button.setEnabled(self.current_page < self.total_pages)
 
     def _populate_table(self, measurements: list[dict[str, Any]]):
-        """Freezes updates while repopulating so the table doesn't flicker."""
         self.table.setUpdatesEnabled(False)
         try:
             self.table.clearContents()
@@ -318,12 +300,12 @@ class HistoryPage(QWidget):
     def _build_item(
         self, col_idx: int, db_key: str | None, value: Any,
     ) -> QTableWidgetItem:
-        """Formats a single cell — floats get fixed decimals, NULL → '—'."""
+        empty_with_dash = (
+            "ReferenceThickness", "ThicknessCorrected",
+            "SessionTag", "Note", "Mode", "FrameCountSample",
+        )
         if value is None or value == "":
-            text = "—" if db_key in (
-                "ReferenceThickness", "ThicknessCorrected",
-                "SessionTag", "Note", "Mode", "FrameCount",
-            ) else ""
+            text = "—" if db_key in empty_with_dash else ""
         elif db_key == "Layer" and isinstance(value, float):
             text = f"{value:.2f}"
         elif db_key == "ThicknessCorrected" and isinstance(value, (int, float)):
@@ -333,7 +315,9 @@ class HistoryPage(QWidget):
         elif db_key == "Wavelength" and isinstance(value, float):
             text = f"{value:.3f}"
         elif db_key == "Date" and isinstance(value, str):
-            text = value[:19]       # trim microseconds if present
+            text = value[:19]
+        elif db_key == "FrameCountSample" and isinstance(value, (int, float)):
+            text = str(int(value))
         else:
             text = str(value)
 
@@ -390,13 +374,8 @@ class HistoryPage(QWidget):
                                 is_error=True)
 
     # ==================================================================
-    # Inline editing                                         NEW in Step 8
+    # Inline editing
     # ==================================================================
-
-    # Cells the user can edit
-    _EDITABLE_COLS = frozenset({
-        _COL_REF, _COL_SESSION, _COL_NOTE,
-    })
 
     def _on_cell_double_clicked(self, row: int, col: int) -> None:
         if col not in self._EDITABLE_COLS:
@@ -410,11 +389,11 @@ class HistoryPage(QWidget):
         row, col = index.row(), index.column()
 
         menu = QMenu(self.table)
-        act_edit_ref = menu.addAction("Edit Reference Thickness…")
-        act_edit_ses = menu.addAction("Edit Session Tag…")
+        act_edit_ref  = menu.addAction("Edit Reference Thickness…")
+        act_edit_ses  = menu.addAction("Edit Session Tag…")
         act_edit_note = menu.addAction("Edit Note…")
         menu.addSeparator()
-        act_delete = menu.addAction("Delete this row…")
+        act_delete    = menu.addAction("Delete this row…")
 
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
         if action is None:
@@ -434,7 +413,6 @@ class HistoryPage(QWidget):
             return None
 
     def _edit_cell(self, row: int, col: int) -> None:
-        """Opens a QInputDialog to edit one field and writes it through."""
         row_id = self._row_id(row)
         if row_id is None:
             return
@@ -453,10 +431,10 @@ class HistoryPage(QWidget):
         if col == self._COL_REF:
             new_val, ok = QInputDialog.getDouble(
                 self, "Edit Reference Thickness",
-                "Reference thickness (nm).  Enter 0 or leave blank to clear:",
-                value   = float(current_value) if current_value is not None else 0.0,
-                min     = 0.0,
-                max     = 5000.0,
+                "Reference thickness (nm). Enter 0 or leave blank to clear:",
+                value    = float(current_value) if current_value is not None else 0.0,
+                min      = 0.0,
+                max      = 5000.0,
                 decimals = 2,
             )
             if not ok:
@@ -497,11 +475,8 @@ class HistoryPage(QWidget):
         self, row_id: int, column: str, value: Any,
     ) -> bool:
         """
-        Runs a direct UPDATE on the measurements table.
-
-        The column name is whitelisted (only reached via the branches in
-        `_edit_cell`) so a plain f-string is safe here — we'd otherwise
-        have to add a dedicated setter to DatabaseService for each field.
+        Direct UPDATE on the measurements table. The column name is
+        whitelisted so a plain f-string is safe here.
         """
         allowed = {"ReferenceThickness", "SessionTag", "Note"}
         if column not in allowed:
@@ -525,8 +500,7 @@ class HistoryPage(QWidget):
 
         w = MessageBox(
             "Delete this row?",
-            f"Permanently delete measurement #{row_id} "
-            f"(and its image files)?",
+            f"Permanently delete measurement #{row_id} (and its image files)?",
             self,
         )
         w.yesButton.setText("Delete"); w.cancelButton.setText("Cancel")

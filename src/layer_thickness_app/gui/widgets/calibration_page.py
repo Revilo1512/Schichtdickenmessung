@@ -5,16 +5,16 @@ Workflow
 --------
 1.  Select material (Book + Page), wavelength and mode.
 2.  The page pulls all measurements with that (Book, Page, Wavelength,
-    Mode) that also carry a ReferenceThickness.  These are the
-    calibration-candidate rows.
+    Mode) that also carry a ReferenceThickness — the calibration
+    candidate rows.
 3.  A table lets the user mark each row as train / test / ignored.
     Quick actions provide sensible defaults:
-      • "Mark all train"        – everything contributes to the fit.
-      • "Random 70/30"          – random split (seeded).
-      • "Hold out <ref>"        – drop all rows at a specific reference
-                                  thickness into test.
-4.  "Fit model" runs least-squares on the train rows and evaluates on
-    the test rows.  Slope / intercept / R² and the before/after
+      - "All train"           – everything contributes to the fit.
+      - "Random 70/30"        – random split (seeded).
+      - "Hold out <ref>"      – drop all rows at a specific reference
+                                thickness into test.
+4.  "Fit Model" runs least-squares on the train rows and evaluates on
+    the test rows. Slope / intercept / R² and the before/after
     statistics (bias, MAE, RMSE) are shown.
 5.  "Save & Activate" persists the model and flags it active for
     measurement-time correction.
@@ -26,7 +26,6 @@ import logging
 from typing import Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui  import QColor, QBrush
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QFrame,
     QTableWidgetItem, QAbstractItemView, QHeaderView, QComboBox,
@@ -41,10 +40,13 @@ from layer_thickness_app.services.database_service    import DatabaseService
 from layer_thickness_app.services.calibration_service import (
     CalibrationService, CalibrationModel,
 )
+from layer_thickness_app.gui.theme import (
+    card_style, borderless_style, quality_color,
+    COLOR_SUCCESS, COLOR_ERROR,
+)
 
 logger = logging.getLogger(__name__)
 
-# Row assignment values stored in the hidden column of each table row.
 ASSIGN_IGNORE = "ignore"
 ASSIGN_TRAIN  = "train"
 ASSIGN_TEST   = "test"
@@ -60,11 +62,13 @@ _COL_FRAMES  = 5
 _COL_SESSION = 6
 _COL_ASSIGN  = 7
 
+_FIT_PANEL_OBJECT_NAME = "calibration_fit_panel"
+
 
 class CalibrationPage(QWidget):
     """Calibration workflow page."""
 
-    calibration_activated = pyqtSignal(int)   # emits the new active calibration id
+    calibration_activated = pyqtSignal(int)
 
     def __init__(
         self,
@@ -78,7 +82,6 @@ class CalibrationPage(QWidget):
         self.db_service          = db_service
         self.calibration_service = calibration_service
 
-        # Most recent candidate rows (mirrored into the table)
         self._rows: list[dict[str, Any]] = []
         self._current_model: CalibrationModel | None = None
 
@@ -97,7 +100,7 @@ class CalibrationPage(QWidget):
 
         root.addWidget(SubtitleLabel("Calibration — Fit Regression Model"))
 
-        # ---- Filter bar ---------------------------------------------
+        # Filter bar
         filter_bar = QHBoxLayout()
         filter_bar.setSpacing(10)
 
@@ -110,7 +113,7 @@ class CalibrationPage(QWidget):
         self.mode_combo.addItems(["multi", "single"])
         self.session_combo = ComboBox(self); self.session_combo.setPlaceholderText("Any session")
 
-        self.load_button  = PushButton("Load Candidates", self)
+        self.load_button = PushButton("Load Candidates", self)
         self.load_button.setIcon(FluentIcon.SYNC)
 
         for label, widget in (
@@ -128,16 +131,16 @@ class CalibrationPage(QWidget):
 
         root.addLayout(filter_bar)
 
-        # ---- Quick-action bar ---------------------------------------
+        # Quick-action bar
         action_bar = QHBoxLayout()
         action_bar.setSpacing(8)
 
-        self.all_train_button   = PushButton("All train", self)
+        self.all_train_button    = PushButton("All train", self)
         self.random_split_button = PushButton("Random 70/30", self)
-        self.holdout_combo      = ComboBox(self)
+        self.holdout_combo       = ComboBox(self)
         self.holdout_combo.setPlaceholderText("Hold out ref...")
-        self.holdout_button     = PushButton("Hold out", self)
-        self.clear_button       = PushButton("Clear assignments", self)
+        self.holdout_button      = PushButton("Hold out", self)
+        self.clear_button        = PushButton("Clear assignments", self)
 
         action_bar.addWidget(StrongBodyLabel("Quick actions:"))
         action_bar.addWidget(self.all_train_button)
@@ -153,7 +156,7 @@ class CalibrationPage(QWidget):
 
         root.addLayout(action_bar)
 
-        # ---- Table --------------------------------------------------
+        # Table
         self.table = TableWidget(self)
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
@@ -177,11 +180,11 @@ class CalibrationPage(QWidget):
 
         root.addWidget(self.table, 1)
 
-        # ---- Fit result panel ---------------------------------------
+        # Fit result panel
         self.fit_panel = self._build_fit_panel()
         root.addWidget(self.fit_panel)
 
-        # ---- Save bar -----------------------------------------------
+        # Save bar
         save_bar = QHBoxLayout()
         save_bar.setSpacing(10)
 
@@ -200,25 +203,26 @@ class CalibrationPage(QWidget):
         root.addLayout(save_bar)
 
     def _build_fit_panel(self) -> QFrame:
-        """The read-only panel that shows slope/intercept/R² and metrics."""
         frame = QFrame(self)
-        frame.setObjectName("fit_panel")
-        frame.setStyleSheet(
-            "QFrame#fit_panel { background-color: transparent;"
-            "border: 1px solid rgba(128,128,128,0.25); border-radius: 8px; }"
-        )
+        frame.setObjectName(_FIT_PANEL_OBJECT_NAME)
+        frame.setStyleSheet(card_style(_FIT_PANEL_OBJECT_NAME))
+
         outer = QHBoxLayout(frame)
         outer.setContentsMargins(20, 15, 20, 15)
         outer.setSpacing(30)
 
         # Left: model parameters
-        left_form  = QFormLayout()
+        left_form = QFormLayout()
         left_form.setSpacing(8)
         self.lbl_slope     = BodyLabel("—")
         self.lbl_intercept = BodyLabel("—")
         self.lbl_r2        = BodyLabel("—")
         self.lbl_nsamples  = BodyLabel("—")
         self.lbl_range     = BodyLabel("—")
+        for lbl in (self.lbl_slope, self.lbl_intercept, self.lbl_r2,
+                    self.lbl_nsamples, self.lbl_range):
+            lbl.setStyleSheet(borderless_style())
+
         left_form.addRow(StrongBodyLabel("Slope (β₁):"),     self.lbl_slope)
         left_form.addRow(StrongBodyLabel("Intercept (β₀):"), self.lbl_intercept)
         left_form.addRow(StrongBodyLabel("R²:"),             self.lbl_r2)
@@ -228,16 +232,20 @@ class CalibrationPage(QWidget):
         # Right: test-set metrics (before vs after)
         right_form = QFormLayout()
         right_form.setSpacing(8)
-        self.lbl_test_n     = BodyLabel("—")
-        self.lbl_mean_bias  = BodyLabel("—")
-        self.lbl_mae        = BodyLabel("—")
-        self.lbl_rmse       = BodyLabel("—")
-        self.lbl_max_err    = BodyLabel("—")
-        right_form.addRow(StrongBodyLabel("Test n:"),              self.lbl_test_n)
-        right_form.addRow(StrongBodyLabel("Mean bias (raw → corr):"), self.lbl_mean_bias)
-        right_form.addRow(StrongBodyLabel("MAE  (raw → corr):"),   self.lbl_mae)
-        right_form.addRow(StrongBodyLabel("RMSE (raw → corr):"),   self.lbl_rmse)
-        right_form.addRow(StrongBodyLabel("Max |err| (raw → corr):"), self.lbl_max_err)
+        self.lbl_test_n    = BodyLabel("—")
+        self.lbl_mean_bias = BodyLabel("—")
+        self.lbl_mae       = BodyLabel("—")
+        self.lbl_rmse      = BodyLabel("—")
+        self.lbl_max_err   = BodyLabel("—")
+        for lbl in (self.lbl_test_n, self.lbl_mean_bias, self.lbl_mae,
+                    self.lbl_rmse, self.lbl_max_err):
+            lbl.setStyleSheet(borderless_style())
+
+        right_form.addRow(StrongBodyLabel("Test n:"),                  self.lbl_test_n)
+        right_form.addRow(StrongBodyLabel("Mean bias (raw → corr):"),  self.lbl_mean_bias)
+        right_form.addRow(StrongBodyLabel("MAE  (raw → corr):"),       self.lbl_mae)
+        right_form.addRow(StrongBodyLabel("RMSE (raw → corr):"),       self.lbl_rmse)
+        right_form.addRow(StrongBodyLabel("Max |err| (raw → corr):"),  self.lbl_max_err)
 
         outer.addLayout(left_form,  1)
         outer.addLayout(right_form, 1)
@@ -264,7 +272,6 @@ class CalibrationPage(QWidget):
     # ==================================================================
 
     def _refresh_filter_options(self) -> None:
-        """Populates the Book / Session combos from the DB."""
         self.book_combo.blockSignals(True)
         self.book_combo.clear()
         self.book_combo.addItems(self.db_service.get_unique_books())
@@ -273,34 +280,25 @@ class CalibrationPage(QWidget):
 
         self.session_combo.blockSignals(True)
         self.session_combo.clear()
-        self.session_combo.addItem("")                  # any session
+        self.session_combo.addItem("")
         self.session_combo.addItems(self.db_service.get_unique_sessions())
         self.session_combo.setCurrentIndex(0)
         self.session_combo.blockSignals(False)
 
     def _on_book_changed(self, _text: str) -> None:
-        """When the Book combo changes, repopulate Page options."""
         book = self.book_combo.currentText()
         if not book:
             self.page_combo.clear()
             return
 
-        # The DB doesn't have a "pages for a given book" helper, so
-        # we pull unique pages of rows matching this book.
-        pages: set[str] = set()
-        rows = self.db_service.get_all_filtered_measurements(book=book)
-        for r in rows:
-            if r.get("Page"):
-                pages.add(r["Page"])
-
+        pages = self.db_service.get_pages_for_book(book)
         self.page_combo.blockSignals(True)
         self.page_combo.clear()
-        self.page_combo.addItems(sorted(pages))
+        self.page_combo.addItems(pages)
         self.page_combo.setCurrentIndex(-1)
         self.page_combo.blockSignals(False)
 
     def _on_load_candidates(self) -> None:
-        """Reads the current filter values and populates the table."""
         book = self.book_combo.currentText() or None
         page = self.page_combo.currentText() or None
         wavelength = self.wave_combo.currentData()
@@ -313,23 +311,13 @@ class CalibrationPage(QWidget):
 
         rows = self.db_service.get_calibration_rows(
             book=book, page=page, session_tag=session,
+            wavelength_um=wavelength, mode=mode,
         )
 
-        # Filter by wavelength + mode in Python — the DB helper doesn't
-        # know about those fields.
-        filtered: list[dict[str, Any]] = []
-        for r in rows:
-            if wavelength is not None and r.get("Wavelength") not in (None, wavelength):
-                continue
-            if mode and r.get("Mode") and r["Mode"] != mode:
-                continue
-            filtered.append(r)
+        self._rows = rows
+        self._populate_table(rows)
 
-        self._rows = filtered
-        self._populate_table(filtered)
-
-        # Populate the hold-out combo with unique reference thicknesses
-        refs = sorted({r["ReferenceThickness"] for r in filtered
+        refs = sorted({r["ReferenceThickness"] for r in rows
                        if r.get("ReferenceThickness") is not None})
         self.holdout_combo.blockSignals(True)
         self.holdout_combo.clear()
@@ -338,14 +326,13 @@ class CalibrationPage(QWidget):
         self.holdout_combo.setCurrentIndex(-1 if not refs else 0)
         self.holdout_combo.blockSignals(False)
 
-        # Reset fit state whenever data changes
         self._clear_fit_panel()
         self._current_model = None
         self.save_button.setEnabled(False)
         self._update_counts_label()
 
-        logger.info("Loaded %d calibration candidates.", len(filtered))
-        if not filtered:
+        logger.info("Loaded %d calibration candidates.", len(rows))
+        if not rows:
             self._toast("No calibration rows match those filters.", is_warning=True)
 
     # ==================================================================
@@ -353,7 +340,6 @@ class CalibrationPage(QWidget):
     # ==================================================================
 
     def _populate_table(self, rows: list[dict[str, Any]]) -> None:
-        """Fills the table with candidate rows — all start as IGNORE."""
         self.table.setUpdatesEnabled(False)
         try:
             self.table.clearContents()
@@ -368,13 +354,16 @@ class CalibrationPage(QWidget):
 
                 layer = r.get("Layer")
                 ref   = r.get("ReferenceThickness")
+                # The DB stores per-side counts; sample frames are what matter
+                # for calibration noise.
+                frames = r.get("FrameCountSample") or r.get("FrameCountRef")
 
                 self.table.setItem(i, _COL_ID,      _item(str(r.get("id", ""))))
                 self.table.setItem(i, _COL_DATE,    _item(str(r.get("Date", ""))[:19]))
-                self.table.setItem(i, _COL_REF,     _item(f"{ref:g}"    if ref   is not None else "—"))
+                self.table.setItem(i, _COL_REF,     _item(f"{ref:g}"     if ref   is not None else "—"))
                 self.table.setItem(i, _COL_LAYER,   _item(f"{layer:.3f}" if layer is not None else "—"))
                 self.table.setItem(i, _COL_MODE,    _item(str(r.get("Mode", ""))))
-                self.table.setItem(i, _COL_FRAMES,  _item(str(r.get("FrameCount", ""))))
+                self.table.setItem(i, _COL_FRAMES,  _item(str(frames) if frames is not None else ""))
                 self.table.setItem(i, _COL_SESSION, _item(str(r.get("SessionTag") or "")))
 
                 combo = QComboBox()
@@ -422,9 +411,7 @@ class CalibrationPage(QWidget):
         _, test_rows = self.calibration_service.split_by_measurement(
             self._rows, test_ratio=0.3,
         )
-        # Map by id for O(1) membership test
         test_ids = {r.get("id") for r in test_rows}
-
         for i, r in enumerate(self._rows):
             target = ASSIGN_TEST if r.get("id") in test_ids else ASSIGN_TRAIN
             self._set_assignment(i, target)
@@ -479,21 +466,15 @@ class CalibrationPage(QWidget):
             )
             return
 
-        shelf      = train_rows[0].get("Shelf", "") or ""
-        # The calibration rows helper doesn't include Shelf — fallback to the first row.
-        # If missing, try to infer it from any measurement matching Book+Page.
-        if not shelf:
-            book = self.book_combo.currentText()
-            page = self.page_combo.currentText()
-            candidates = self.db_service.get_all_filtered_measurements(book=book, page=page)
-            if candidates:
-                shelf = candidates[0].get("Shelf", "") or ""
-
         book = self.book_combo.currentText()
         page = self.page_combo.currentText()
         wavelength = float(self.wave_combo.currentData())
         mode = self.mode_combo.currentText()
         session = self.session_combo.currentText() or None
+
+        shelf = train_rows[0].get("Shelf", "") or ""
+        if not shelf:
+            shelf = self.db_service.get_shelf_for_book_page(book, page) or ""
 
         try:
             model = self.calibration_service.fit_from_rows(
@@ -523,16 +504,16 @@ class CalibrationPage(QWidget):
         self.lbl_nsamples.setText(str(model.n_samples))
         self.lbl_range.setText(f"{model.min_ref_nm:g} – {model.max_ref_nm:g} nm")
 
-        # Color R² by quality
-        r2_color = "#00b050" if model.r_squared >= 0.95 else \
-                   "#e0a500" if model.r_squared >= 0.80 else "#e04141"
-        self.lbl_r2.setStyleSheet(f"font-weight: bold; color: {r2_color};")
+        self.lbl_r2.setStyleSheet(
+            f"{borderless_style()} font-weight: bold; "
+            f"color: {quality_color(model.r_squared)};"
+        )
 
         if not test_rows:
             for lbl in (self.lbl_test_n, self.lbl_mean_bias,
                         self.lbl_mae, self.lbl_rmse, self.lbl_max_err):
                 lbl.setText("— (no test rows)")
-                lbl.setStyleSheet("")
+                lbl.setStyleSheet(borderless_style())
             return
 
         measured  = [r["Layer"]              for r in test_rows]
@@ -548,9 +529,8 @@ class CalibrationPage(QWidget):
         self.lbl_test_n.setText(str(metrics["n"]))
 
         def _arrow(before: float, after: float) -> tuple[str, str]:
-            """(text, color)"""
             improved = abs(after) < abs(before)
-            color = "#00b050" if improved else "#e04141"
+            color = COLOR_SUCCESS if improved else COLOR_ERROR
             return f"{before:+.3f}  →  {after:+.3f} nm", color
 
         for label, before_k, after_k in (
@@ -561,7 +541,7 @@ class CalibrationPage(QWidget):
         ):
             text, color = _arrow(metrics[before_k], metrics[after_k])
             label.setText(text)
-            label.setStyleSheet(f"color: {color};")
+            label.setStyleSheet(f"{borderless_style()} color: {color};")
 
     def _clear_fit_panel(self) -> None:
         for lbl in (
@@ -571,7 +551,7 @@ class CalibrationPage(QWidget):
             self.lbl_rmse, self.lbl_max_err,
         ):
             lbl.setText("—")
-            lbl.setStyleSheet("")
+            lbl.setStyleSheet(borderless_style())
 
     def _on_save(self) -> None:
         if self._current_model is None:
@@ -600,7 +580,6 @@ class CalibrationPage(QWidget):
             f"Saved calibration (ID {new_id}) and activated it.",
             is_error=False,
         )
-        # Refresh session options so the new one appears everywhere.
         self._refresh_filter_options()
 
     # ==================================================================

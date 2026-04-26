@@ -15,6 +15,9 @@ from layer_thickness_app.services.camera_service          import (
 )
 from layer_thickness_app.services.database_service        import DatabaseService
 from layer_thickness_app.services.material_service        import MaterialService
+from layer_thickness_app.services.material_profiles       import (
+    get_profile, MaterialProfile,
+)
 from layer_thickness_app.services.calculation_service     import CalculationService
 from layer_thickness_app.services.plausibility_service    import (
     PlausibilityService, PlausibilityResult, PlausibilitySeverity,
@@ -35,16 +38,7 @@ DEFAULT_DB  = Path("data") / "measurements.db"
 
 
 class MainController:
-    """
-    Orchestrates services and the main window.
-
-    Step 8 additions
-    ----------------
-    • Merges the optional `reference_thickness_nm` and `session_tag`
-      fields from the measure page into every saved measurement.
-    • After a successful save, refreshes the calibration/validation page
-      dropdowns so new sessions appear immediately without restart.
-    """
+    """Orchestrates services and the main window."""
 
     def __init__(self, config: AppConfig):
         self.config = config
@@ -59,10 +53,11 @@ class MainController:
             plausibility_service=self.plausibility_service,
         )
         self.camera_service       = CameraService()
-
-        # BA2 services
         self.calibration_service  = CalibrationService(db_service=self.db_service)
         self.msa_service          = MSAService()
+
+        # Currently selected MaterialProfile, refreshed on material change.
+        self._active_profile: MaterialProfile | None = None
 
         # View
         self.view = MainWindow(
@@ -112,6 +107,7 @@ class MainController:
         self.measurement_page.capture_material_requested.connect(self.on_take_material_image)
         self.measurement_page.reset_requested.connect(self.on_reset_measurement)
         self.measurement_page.config_changed.connect(self._on_measure_config_changed)
+        self.measurement_page.material_changed.connect(self._on_material_changed)
 
         # Calibration page
         try:
@@ -140,6 +136,52 @@ class MainController:
     def _on_measure_config_changed(self):
         self.measurement_page.set_calculation_enabled(True)
 
+    # ------------------------------------------------------------------
+    # MaterialProfile wiring
+    # ------------------------------------------------------------------
+
+    def _on_material_changed(self, path: str | None):
+        """
+        Refresh the per-material plausibility profile and update UI hints
+        whenever the operator picks a new material.
+        """
+        if not path:
+            self._active_profile = None
+            self.plausibility_service = PlausibilityService()
+            self.calculation_service.plausibility = self.plausibility_service
+            self.measurement_page.set_profile_caption("")
+            self.measurement_page.set_reference_thickness_hint(None, None)
+            return
+
+        try:
+            shelf, book, page = path.split("/")
+        except ValueError:
+            logger.debug("Invalid material path: %s", path)
+            return
+
+        profile = get_profile(shelf, book, page)
+        self._active_profile = profile
+
+        # Build a profile-bound plausibility instance and hand it to the
+        # calculation service so the gate uses the right thresholds.
+        self.plausibility_service = PlausibilityService(profile=profile)
+        self.calculation_service.plausibility = self.plausibility_service
+
+        if profile is None:
+            self.measurement_page.set_profile_caption(
+                "No material profile -- using default plausibility thresholds."
+            )
+            self.measurement_page.set_reference_thickness_hint(None, None)
+        else:
+            self.measurement_page.set_profile_caption(
+                f"Profile: {profile.label} "
+                f"(sat_warn={profile.saturation_warn:.0f}, "
+                f"sig_warn={profile.signal_warn:.0f}, "
+                f"sig_err={profile.signal_err:.0f})"
+            )
+            lo, hi = profile.expected_range_nm
+            self.measurement_page.set_reference_thickness_hint(lo, hi)
+
     def _on_calibration_activated(self, calibration_id: int):
         logger.info("New calibration activated: id=%s", calibration_id)
         self.measurement_page.show_info_bar(
@@ -158,7 +200,7 @@ class MainController:
     # ------------------------------------------------------------------
 
     def on_reset_measurement(self):
-        logger.info("Resetting measurement page...")
+        logger.info("Resetting measurement page.")
         self.measurement_page.reset_all()
 
     def on_take_reference_image(self):
@@ -215,7 +257,7 @@ class MainController:
     # ------------------------------------------------------------------
 
     def on_start_calc(self):
-        logger.info("Calculation started...")
+        logger.info("Calculation started.")
         self.measurement_page.set_result_text("Calculating...")
         QApplication.processEvents()
 
@@ -239,7 +281,8 @@ class MainController:
         mat_capture: FrameCaptureResult = ui["mat_capture"]
 
         logger.info(
-            "Calculating | material=%s | λ=%s µm | n=%d/%d frames | ref_nm=%s | session=%s",
+            "Calculating | material=%s | lambda=%s um | n=%d/%d frames | "
+            "ref_nm=%s | session=%s",
             ui["material_path"], ui["wavelength_um"],
             ref_capture.frames_used, mat_capture.frames_used,
             ui["reference_thickness_nm"], ui["session_tag"],
@@ -258,7 +301,6 @@ class MainController:
         if error_msg:
             self._fail("Calculation Error", error_msg); return
 
-        # Apply active calibration
         mode = capture_stats.get("Mode", "single")
         corrected_nm = self._apply_active_calibration(
             raw_thickness_nm = thickness_nm,
@@ -269,16 +311,14 @@ class MainController:
         if corrected_nm is not None:
             capture_stats["ThicknessCorrected"] = round(corrected_nm, 4)
 
-        # Render result
         result_html = self._format_result_html(thickness_nm, corrected_nm)
         self.measurement_page.set_result_text(result_html)
         logger.info(
             "Calculation successful: raw=%.4f nm, corrected=%s",
             thickness_nm,
-            f"{corrected_nm:.4f} nm" if corrected_nm is not None else "—",
+            f"{corrected_nm:.4f} nm" if corrected_nm is not None else "-",
         )
 
-        # Non-blocking plausibility warning
         if capture_stats.get("plausibility_severity") == PlausibilitySeverity.WARNING.value:
             self.measurement_page.show_info_bar(
                 title      = capture_stats.get("plausibility_title", "Warning"),
@@ -286,7 +326,6 @@ class MainController:
                 is_warning = True,
             )
 
-        # Save to DB
         if ui["save_checked"]:
             self._save_measurement_to_db(
                 thickness       = thickness_nm,
@@ -327,14 +366,14 @@ class MainController:
 
         if not model.is_in_range(raw_thickness_nm):
             logger.warning(
-                "Raw value %.3f nm outside calibration range (%.1f–%.1f nm).",
+                "Raw value %.3f nm outside calibration range (%.1f-%.1f nm).",
                 raw_thickness_nm, model.min_ref_nm, model.max_ref_nm,
             )
             self.measurement_page.show_info_bar(
                 "Extrapolation Warning",
                 f"Raw value {raw_thickness_nm:.2f} nm is outside the "
                 f"calibration range "
-                f"({model.min_ref_nm:g}–{model.max_ref_nm:g} nm). "
+                f"({model.min_ref_nm:g}-{model.max_ref_nm:g} nm). "
                 f"Corrected value may be unreliable.",
                 is_warning=True,
             )
@@ -369,7 +408,7 @@ class MainController:
         ui_data:       dict[str, Any],
         capture_stats: dict[str, Any],
     ):
-        logger.info("Saving measurement to database...")
+        logger.info("Saving measurement to database.")
         try:
             name = ui_data["name"] if (ui_data["use_name"] and ui_data["name"]) else "Guest"
             note = ui_data["note"] or None
@@ -394,11 +433,14 @@ class MainController:
             }
             db_data.update(capture_stats)
 
-            # Step 8: merge reference thickness and session tag when set
             if ui_data.get("reference_thickness_nm") is not None:
                 db_data["ReferenceThickness"] = float(ui_data["reference_thickness_nm"])
             if ui_data.get("session_tag"):
                 db_data["SessionTag"] = str(ui_data["session_tag"])
+            if ui_data.get("probe"):
+                db_data["Probe"] = str(ui_data["probe"])
+            if ui_data.get("run_index") is not None:
+                db_data["RunIndex"] = int(ui_data["run_index"])
 
             row_id = self.db_service.save_measurement(db_data)
             if row_id <= 0:
@@ -409,9 +451,6 @@ class MainController:
                 "Success", f"Measurement saved (ID {row_id}).",
             )
 
-            # If this measurement contributed calibration data, refresh
-            # the calibration/validation pickers so the new session tag
-            # or reference thickness appears there without a restart.
             if db_data.get("ReferenceThickness") is not None or db_data.get("SessionTag"):
                 try:
                     self.calibration_page.refresh_data()

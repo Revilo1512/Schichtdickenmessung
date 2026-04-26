@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 import logging
 from pathlib import Path
@@ -8,8 +7,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Columns on the measurements table that are safe to use in ORDER BY /
-# filter clauses and that the import/export services may ship across ZIP.
 VALID_COLUMNS = frozenset({
     "id", "Date", "Name", "Layer", "Wavelength",
     "RefImage", "MatImage", "Shelf", "Book", "Page", "Note",
@@ -58,7 +55,6 @@ class DatabaseService:
     # ==================================================================
 
     def _create_measurements_table(self):
-        """Final v5 schema, declared directly — no migration path."""
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS measurements (
                 id                 INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,11 +85,6 @@ class DatabaseService:
         self.conn.commit()
 
     def _create_calibrations_table(self):
-        """
-        Stores fitted linear regression correction models.
-        One row per fit. For a given (Shelf, Book, Page, Wavelength, Mode)
-        combination only a single row may have IsActive=1.
-        """
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS calibrations (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,15 +132,15 @@ class DatabaseService:
             logger.error("Error creating indexes: %s", e)
 
     # ==================================================================
-    # Measurements — write
+    # Measurements - write
     # ==================================================================
 
     def save_measurement(self, data: dict[str, Any]) -> int:
         if not data:
             logger.error("No data provided to save_measurement.")
             return -1
-        clean = {k: v for k, v in data.items() if k in VALID_COLUMNS
-                 or k in ("RefImage", "MatImage")}
+        clean = {k: v for k, v in data.items()
+                 if k in VALID_COLUMNS or k in ("RefImage", "MatImage")}
         try:
             columns      = ", ".join(clean.keys())
             placeholders = ", ".join(f":{k}" for k in clean.keys())
@@ -180,11 +171,11 @@ class DatabaseService:
                 self._delete_image_file(row["MatImage"])
             return row_was_deleted
         except sqlite3.Error as e:
-            logger.error("Error deleting measurement with id %s: %s", measurement_id, e)
+            logger.error("Error deleting measurement %s: %s", measurement_id, e)
             return False
 
     # ==================================================================
-    # Measurements — read (single)
+    # Measurements - read (single)
     # ==================================================================
 
     def get_measurement(self, measurement_id: int) -> dict[str, Any] | None:
@@ -195,11 +186,11 @@ class DatabaseService:
             row = self.cursor.fetchone()
             return dict(row) if row else None
         except sqlite3.Error as e:
-            logger.error("Error fetching measurement id %s: %s", measurement_id, e)
+            logger.error("Error fetching measurement %s: %s", measurement_id, e)
             return None
 
     # ==================================================================
-    # Measurements — read (filtered / paginated)
+    # Measurements - read (filtered / paginated)
     # ==================================================================
 
     def _build_filter_query(
@@ -255,9 +246,9 @@ class DatabaseService:
         order_by:    str = "Date", order_dir: str = "DESC",
     ) -> tuple[list[dict[str, Any]], int]:
         """
-        Returns (rows, total_count). Combines count and page-of-rows
-        into a single SELECT using SQLite's window functions so the page
-        view only makes one round-trip to the DB.
+        Returns ``(rows, total_count)``. The total is computed via a
+        window function in the same SELECT so the page only makes one
+        round-trip.
         """
         safe_order_by  = order_by  if order_by  in VALID_COLUMNS else "Date"
         safe_order_dir = order_dir if order_dir in ("ASC", "DESC") else "DESC"
@@ -282,8 +273,7 @@ class DatabaseService:
             for r in rows:
                 r.pop("__total", None)
             if total == 0:
-                # Rows came back empty but there may still be data on
-                # earlier pages; fall back to a dedicated COUNT.
+                # Empty page may still have data on earlier pages.
                 total = self.get_measurements_count(
                     name_filter, start_date, end_date, shelf, book, page,
                     note_filter, session_tag, mode_filter, probe,
@@ -340,18 +330,23 @@ class DatabaseService:
             return 0
 
     # ==================================================================
-    # Measurements — campaign queries
+    # Measurements - campaign queries
     # ==================================================================
 
     def get_calibration_rows(
-        self, book: str, page: str,
-        session_tag: str | None = None, probe: str | None = None,
+        self,
+        book:          str,
+        page:          str,
+        session_tag:   str | None = None,
+        probe:         str | None = None,
+        wavelength_um: float | None = None,
+        mode:          str | None = None,
     ) -> list[dict[str, Any]]:
-        """Rows with a known ReferenceThickness — the calibration pool."""
+        """Rows with a known ReferenceThickness; the calibration pool."""
         query = """
             SELECT id, Layer, ThicknessCorrected, ReferenceThickness,
                    Mode, FrameCountRef, FrameCountSample,
-                   SessionTag, Probe, RunIndex, Date, Wavelength
+                   SessionTag, Probe, RunIndex, Date, Wavelength, Shelf
             FROM measurements
             WHERE Book = :book
               AND Page = :page
@@ -364,6 +359,12 @@ class DatabaseService:
         if probe:
             query += " AND Probe = :probe"
             params["probe"] = probe
+        if wavelength_um is not None:
+            query += " AND (Wavelength IS NULL OR Wavelength = :wavelength)"
+            params["wavelength"] = wavelength_um
+        if mode:
+            query += " AND (Mode IS NULL OR Mode = :mode)"
+            params["mode"] = mode
         query += " ORDER BY ReferenceThickness ASC, Date ASC"
         try:
             self.cursor.execute(query, params)
@@ -384,15 +385,21 @@ class DatabaseService:
             return []
 
     def get_msa_rows(
-        self, book: str, page: str, reference_nm: float,
-        session_tag: str | None = None, probe: str | None = None,
-        tolerance: float = 0.5,
+        self,
+        book:          str,
+        page:          str,
+        reference_nm:  float,
+        session_tag:   str | None = None,
+        probe:         str | None = None,
+        wavelength_um: float | None = None,
+        mode:          str | None = None,
+        tolerance:     float = 0.5,
     ) -> list[dict[str, Any]]:
-        """Repeated-measurement series for one reference sample."""
+        """Repeated-measurement series for a single reference sample."""
         query = """
             SELECT id, Layer, ThicknessCorrected, ReferenceThickness,
-                   Mode, FrameCountRef, FrameCountSample,
-                   SessionTag, Probe, RunIndex, Date
+                   Mode, FrameCountRef, FrameCountSample, Wavelength,
+                   SessionTag, Probe, RunIndex, Date, Shelf
             FROM measurements
             WHERE Book = :book
               AND Page = :page
@@ -409,6 +416,12 @@ class DatabaseService:
         if probe:
             query += " AND Probe = :probe"
             params["probe"] = probe
+        if wavelength_um is not None:
+            query += " AND (Wavelength IS NULL OR Wavelength = :wavelength)"
+            params["wavelength"] = wavelength_um
+        if mode:
+            query += " AND (Mode IS NULL OR Mode = :mode)"
+            params["mode"] = mode
         query += " ORDER BY Date ASC"
         try:
             self.cursor.execute(query, params)
@@ -418,7 +431,7 @@ class DatabaseService:
             return []
 
     # ==================================================================
-    # Calibrations — write / read / activate
+    # Calibrations - write / read / activate
     # ==================================================================
 
     def save_calibration(self, data: dict[str, Any]) -> int:
@@ -447,7 +460,7 @@ class DatabaseService:
             row = self.cursor.fetchone()
             return dict(row) if row else None
         except sqlite3.Error as e:
-            logger.error("Error fetching calibration id %s: %s", calibration_id, e)
+            logger.error("Error fetching calibration %s: %s", calibration_id, e)
             return None
 
     def get_calibrations(
@@ -488,7 +501,7 @@ class DatabaseService:
             self.conn.commit()
             return self.cursor.rowcount > 0
         except sqlite3.Error as e:
-            logger.error("Error deleting calibration id %s: %s", calibration_id, e)
+            logger.error("Error deleting calibration %s: %s", calibration_id, e)
             return False
 
     def get_active_calibration(
@@ -513,8 +526,9 @@ class DatabaseService:
 
     def set_active_calibration(self, calibration_id: int) -> bool:
         """
-        Marks the given calibration as active. Atomically deactivates
-        any other calibrations sharing (Shelf, Book, Page, Wavelength, Mode).
+        Atomically deactivates any other calibration sharing the same
+        (Shelf, Book, Page, Wavelength, Mode) tuple, then marks the given
+        row active.
         """
         try:
             self.cursor.execute(
@@ -560,7 +574,7 @@ class DatabaseService:
             return False
 
     # ==================================================================
-    # Unique-value helpers (for filter ComboBoxes)
+    # Unique-value helpers (filter ComboBoxes)
     # ==================================================================
 
     def _get_unique_column_values(self, column_name: str) -> list[str]:
@@ -586,6 +600,39 @@ class DatabaseService:
     def get_unique_sessions(self) -> list[str]: return self._get_unique_column_values("SessionTag")
     def get_unique_probes(self)   -> list[str]: return self._get_unique_column_values("Probe")
 
+    def get_pages_for_book(self, book: str) -> list[str]:
+        """Distinct Page values seen in measurements for a given Book."""
+        if not book:
+            return []
+        try:
+            self.cursor.execute(
+                "SELECT DISTINCT Page FROM measurements "
+                "WHERE Book = ? AND Page IS NOT NULL AND Page != '' "
+                "ORDER BY Page",
+                (book,),
+            )
+            return [row["Page"] for row in self.cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error("Error fetching pages for book %s: %s", book, e)
+            return []
+
+    def get_shelf_for_book_page(self, book: str, page: str) -> str | None:
+        """Looks up the shelf for a (Book, Page) pair from any matching row."""
+        if not book or not page:
+            return None
+        try:
+            self.cursor.execute(
+                "SELECT Shelf FROM measurements "
+                "WHERE Book = ? AND Page = ? AND Shelf IS NOT NULL AND Shelf != '' "
+                "LIMIT 1",
+                (book, page),
+            )
+            row = self.cursor.fetchone()
+            return row["Shelf"] if row else None
+        except sqlite3.Error as e:
+            logger.error("Error fetching shelf for %s/%s: %s", book, page, e)
+            return None
+
     # ==================================================================
     # Housekeeping
     # ==================================================================
@@ -596,7 +643,7 @@ class DatabaseService:
         try:
             file_path = self.image_dir_path / filename
             if file_path.exists():
-                os.remove(file_path)
+                file_path.unlink()
                 logger.info("Deleted image file: %s", file_path)
             else:
                 logger.warning("Tried to delete file, but not found: %s", file_path)

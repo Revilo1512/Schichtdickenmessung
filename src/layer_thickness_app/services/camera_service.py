@@ -8,23 +8,19 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# At least 50 % of the requested frames must come back from the hardware
-# before a multi-frame capture is considered valid.
-_MIN_USABLE_FRACTION     = 0.5
-_MIN_FRAMES_FOR_REJECTION = 5   # below this, skip sigma-clipping
+_MIN_USABLE_FRACTION      = 0.5
+_MIN_FRAMES_FOR_REJECTION = 5
 
 
 @dataclass
 class FrameCaptureResult:
     """
-    Immutable result object returned by capture_frame().
+    Result of a (possibly multi-frame) capture.
 
-    Attributes
-    ----------
     image             : BGR uint8, pixel-wise averaged frame.
     gray_mean         : outlier-cleaned mean of per-frame gray scalars.
-    gray_std          : sample std of per-frame gray scalars after outlier
-                        rejection (0.0 for single-frame captures).
+    gray_std          : sample std of per-frame gray scalars after
+                        outlier rejection (0.0 for single-frame captures).
     frame_count       : number of frames requested.
     frames_used       : number of frames kept after outlier rejection.
     outliers_rejected : number of frames discarded by sigma-clipping.
@@ -46,7 +42,7 @@ class FrameCaptureResult:
 
 
 def _bgr_frame_to_gray_scalar(frame: np.ndarray) -> float:
-    """Mean luminance of a BGR uint8 frame (ITU-R 601, no cv2 dependency)."""
+    """ITU-R 601 luminance of a BGR uint8 frame."""
     b = frame[:, :, 0].mean()
     g = frame[:, :, 1].mean()
     r = frame[:, :, 2].mean()
@@ -55,14 +51,13 @@ def _bgr_frame_to_gray_scalar(frame: np.ndarray) -> float:
 
 class CameraService:
     """
-    Manages interactions with the IDS uEye camera.
+    IDS uEye camera wrapper.
 
-    Connection is explicit — the service does NOT connect on __init__.
-    Callers must list available cameras and then call connect(camera_id).
-
-    capture_frame(n_frames) is the single public capture API. n_frames=1
-    takes one frame; n_frames>1 captures n frames, sigma-clips outliers,
-    and returns the pixel-wise average along with statistics.
+    Connection is explicit: callers must list available cameras and then
+    call connect(camera_id). capture_frame(n_frames) is the single public
+    capture API; n_frames=1 takes one frame, n_frames>1 captures n
+    frames, sigma-clips outliers, and returns the pixel-wise average plus
+    statistics.
     """
 
     def __init__(self):
@@ -73,14 +68,13 @@ class CameraService:
         self.width            = ueye.int()
         self.height           = ueye.int()
         self.model_name       = ""
-        self.bits_per_pixel   = ueye.int(24)   # 8-bit BGR packed
+        self.bits_per_pixel   = ueye.int(24)
 
     # ------------------------------------------------------------------
-    # Camera discovery & lifecycle
+    # Camera discovery and lifecycle
     # ------------------------------------------------------------------
 
     def list_available_cameras(self) -> list[dict[str, Any]]:
-        """Returns a list of connected uEye cameras that are not in use."""
         try:
             cam_list = ueye.UEYE_CAMERA_LIST()
             if ueye.is_GetCameraList(cam_list) != ueye.IS_SUCCESS:
@@ -106,7 +100,6 @@ class CameraService:
             return []
 
     def connect(self, camera_id: int) -> bool:
-        """Disconnects any active camera, then initialises the requested one."""
         if self.is_connected:
             self.disconnect()
 
@@ -177,11 +170,10 @@ class CameraService:
         self.disconnect()
 
     # ------------------------------------------------------------------
-    # Low-level hardware capture (private)
+    # Low-level hardware capture
     # ------------------------------------------------------------------
 
     def _read_raw_frame(self) -> np.ndarray | None:
-        """Trigger one exposure and copy the frame from camera memory."""
         ret = ueye.is_FreezeVideo(self.h_cam, ueye.IS_WAIT)
         if ret != ueye.IS_SUCCESS:
             logger.error("is_FreezeVideo failed. Code: %s", ret)
@@ -208,22 +200,17 @@ class CameraService:
         """
         Capture one or more frames and return a FrameCaptureResult.
 
-        Single-frame (n_frames == 1)
-            Returns a single frame wrapped in the richer return type.
-        Multi-frame (n_frames > 1)
-            Captures n frames, sigma-clips outlier gray scalars, averages
-            the kept frames pixel-wise (vectorised), and returns the
-            cleaned statistics.
-
-        Returns None if the camera is not connected, or if fewer than
-        _MIN_USABLE_FRACTION of the requested frames came back from
-        hardware.
+        Single-frame fast path is taken when ``n_frames == 1``. For
+        n_frames > 1 the gray scalar of each frame is sigma-clipped, the
+        kept frames are averaged pixel-wise, and the cleaned statistics
+        are returned. Returns None if the camera is not connected, or if
+        fewer than _MIN_USABLE_FRACTION of the requested frames came
+        back from hardware.
         """
         if not self.is_connected:
             logger.error("capture_frame: camera not connected.")
             return None
 
-        # Single-frame fast path
         if n_frames == 1:
             raw = self._read_raw_frame()
             if raw is None:
@@ -238,8 +225,7 @@ class CameraService:
                 outliers_rejected = 0,
             )
 
-        # Multi-frame path
-        logger.info("Multi-frame capture: requesting %d frames (σ=%.1f).",
+        logger.info("Multi-frame capture: requesting %d frames (sigma=%.1f).",
                     n_frames, outlier_sigma)
 
         raw_frames:   list[np.ndarray] = []
@@ -259,30 +245,26 @@ class CameraService:
 
         if n_captured < max(1, int(n_frames * _MIN_USABLE_FRACTION)):
             logger.error(
-                "Multi-frame: only %d/%d frames captured — below minimum "
+                "Multi-frame: only %d/%d frames captured -- below minimum "
                 "usable threshold (%.0f %%). Aborting.",
                 n_captured, n_frames, _MIN_USABLE_FRACTION * 100,
             )
             return None
 
-        # Outlier rejection (sigma-clipping)
-        kept_frames = raw_frames
-        kept_grays  = gray_scalars
-        n_outliers  = 0
+        keep_mask = np.ones(n_captured, dtype=bool)
+        n_outliers = 0
 
         if n_captured >= _MIN_FRAMES_FOR_REJECTION:
-            gray_arr = np.array(gray_scalars, dtype=np.float64)
+            gray_arr = np.asarray(gray_scalars, dtype=np.float64)
             mu       = gray_arr.mean()
             sigma    = gray_arr.std()
 
             if sigma > 0:
-                keep_mask = np.abs(gray_arr - mu) <= outlier_sigma * sigma
-                n_kept    = int(keep_mask.sum())
-                if n_kept > 0:
-                    kept_frames = [f for f, k in zip(raw_frames, keep_mask) if k]
-                    kept_grays  = gray_arr[keep_mask].tolist()
-                    n_outliers  = n_captured - n_kept
-                    if n_outliers > 0:
+                candidate = np.abs(gray_arr - mu) <= outlier_sigma * sigma
+                if candidate.any():
+                    keep_mask  = candidate
+                    n_outliers = int(n_captured - keep_mask.sum())
+                    if n_outliers:
                         logger.info(
                             "Multi-frame: rejected %d outlier frame(s) "
                             "(sigma threshold = %.1f).",
@@ -290,24 +272,40 @@ class CameraService:
                         )
                 else:
                     logger.warning(
-                        "Multi-frame: sigma-clipping would reject ALL frames "
-                        "— using all %d frames instead.", n_captured,
+                        "Multi-frame: sigma-clipping would reject ALL frames; "
+                        "using all %d frames instead.", n_captured,
                     )
             else:
-                logger.debug("Multi-frame: σ = 0, all frames identical — no rejection.")
+                logger.debug("Multi-frame: sigma = 0, all frames identical.")
 
-        # Vectorised pixel-wise average.
-        stack     = np.stack(kept_frames).astype(np.float32)   # (N, H, W, 3)
-        avg_frame = stack.mean(axis=0).astype(np.uint8)
+        # Incremental float32 accumulator avoids an N*H*W*3 stack.
+        accumulator: np.ndarray | None = None
+        n_kept = 0
+        kept_grays: list[float] = []
+        for frame, gray, keep in zip(raw_frames, gray_scalars, keep_mask):
+            if not keep:
+                continue
+            if accumulator is None:
+                accumulator = frame.astype(np.float32)
+            else:
+                accumulator += frame
+            n_kept += 1
+            kept_grays.append(gray)
 
-        clean_arr = np.array(kept_grays, dtype=np.float64)
+        if accumulator is None or n_kept == 0:
+            logger.error("Multi-frame: no frames left after rejection.")
+            return None
+
+        avg_frame = (accumulator / float(n_kept)).astype(np.uint8)
+
+        clean_arr = np.asarray(kept_grays, dtype=np.float64)
         gray_mean = float(clean_arr.mean())
-        gray_std  = float(clean_arr.std(ddof=1)) if len(clean_arr) > 1 else 0.0
+        gray_std  = float(clean_arr.std(ddof=1)) if n_kept > 1 else 0.0
 
         logger.info(
             "Multi-frame result: frames_used=%d, outliers=%d, "
             "gray_mean=%.3f, gray_std=%.3f",
-            len(kept_frames), n_outliers, gray_mean, gray_std,
+            n_kept, n_outliers, gray_mean, gray_std,
         )
 
         return FrameCaptureResult(
@@ -315,6 +313,6 @@ class CameraService:
             gray_mean         = gray_mean,
             gray_std          = gray_std,
             frame_count       = n_frames,
-            frames_used       = len(kept_frames),
+            frames_used       = n_kept,
             outliers_rejected = n_outliers,
         )

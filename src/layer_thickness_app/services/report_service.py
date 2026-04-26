@@ -1,15 +1,15 @@
 """
-Report export for MSA Typ 1 validation studies.
+Report export for MSA Type 1 validation studies.
 
 Produces a timestamped ZIP file containing:
-  * summary.txt       — human-readable headline with Cg / Cgk verdicts
-  * msa_raw.csv       — one-row CSV with the raw-measurements MSA report
-  * msa_corrected.csv — one-row CSV with the corrected MSA report (if any)
-  * measurements.csv  — the underlying repeated-measurement series
-  * calibration.csv   — the calibration model metadata (if any)
+  - summary.txt       : human-readable headline with Cg / Cgk verdicts
+  - msa_raw.csv       : one-row CSV with the raw-measurements MSA report
+  - msa_corrected.csv : one-row CSV with the corrected MSA report (if any)
+  - measurements.csv  : the underlying repeated-measurement series
+  - calibration.csv   : the calibration model metadata (if any)
 
-All files are plain ASCII / UTF-8 CSV for easy import into Excel, Minitab
-or any downstream statistics tool.
+All files are plain UTF-8 CSV for easy import into Excel, Minitab or
+any downstream statistics tool.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from __future__ import annotations
 import csv
 import datetime
 import logging
-import os
 import shutil
 import tempfile
 from dataclasses import asdict
@@ -109,7 +108,7 @@ class ReportService:
         tolerance:           float,
         material_label:      str,
     ) -> None:
-        """Human-readable summary, intended for the thesis appendix."""
+        """Human-readable headline summary of the MSA study."""
         lines: list[str] = []
         lines.append("=" * 72)
         lines.append("MSA Type 1 Validation Report")
@@ -175,14 +174,15 @@ class ReportService:
         if not measurements:
             path.write_text("", encoding="utf-8")
             return
-        # Build a stable column order.  Put the most useful fields first,
-        # then whatever else the DB returned (kept for traceability).
+
+        # Stable column order: useful fields first, then everything else.
         preferred = [
             "id", "Date", "Layer", "ThicknessCorrected",
-            "ReferenceThickness", "Mode", "FrameCount",
+            "ReferenceThickness", "Mode",
+            "FrameCountRef", "FrameCountSample",
             "MeanGrayRef", "MeanGraySample",
             "StdGrayRef", "StdGraySample",
-            "SessionTag",
+            "SessionTag", "Probe", "RunIndex",
         ]
         all_keys: list[str] = []
         seen: set[str] = set()
@@ -201,7 +201,6 @@ class ReportService:
 
     @staticmethod
     def _write_calibration_csv(path: Path, model: CalibrationModel) -> None:
-        """Dumps the active calibration metadata."""
         row = asdict(model)
         with path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=list(row.keys()))
@@ -214,22 +213,19 @@ class ReportService:
 
     @staticmethod
     def _safe_filename_fragment(text: str) -> str:
-        """Turns an arbitrary label into a filesystem-safe filename chunk."""
+        """Turn an arbitrary label into a filesystem-safe filename chunk."""
         keep = []
         for ch in text:
             if ch.isalnum() or ch in "-_":
                 keep.append(ch)
             elif ch in (" ", "/", "\\", ".", ","):
                 keep.append("_")
-            # anything else is dropped
-        result = "".join(keep).strip("_")
-        return result[:60]      # cap length for Windows-compat paths
+        return "".join(keep).strip("_")[:60]
 
 
 # ---------------------------------------------------------------------------
-# Verdict text — shared with the ValidationPage's on-screen banner so the
-# TXT export and the UI stay consistent.  Kept as a module-level helper
-# instead of a static method to avoid a circular import back into UI code.
+# Module-level helper kept here (instead of as a static method) so the UI
+# layer can import it without dragging the writer code along.
 # ---------------------------------------------------------------------------
 def _verdict_text(raw: MSAReport, corrected: MSAReport) -> str:
     if corrected.is_capable and not raw.is_capable:

@@ -3,12 +3,12 @@ Measurement System Analysis — Type 1 (Gage Study).
 
 Two capability indices are computed:
 
-    Cg   = (K/100 · Tol)          / (L · s)       = 0.2 · Tol / (6 · s)
-    Cgk  = ((K/200) · Tol − |x̄ − xₘ|) / ((L/2) · s) = (0.1·Tol − bias) / (3·s)
+    Cg   = (K/100 · Tol)            / (L · s)         = 0.2 · Tol / (6 · s)
+    Cgk  = ((K/200) · Tol − |x̄ − xₘ|) / ((L/2) · s)    = (0.1 · Tol − bias) / (3 · s)
 
 with the Minitab defaults K = 20, L = 6.
 
-A system is considered capable when Cg and Cgk are both ≥ 1.33.
+A system is considered capable when both Cg and Cgk are ≥ 1.33.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ class MSAReport:
     def summary(self) -> str:
         status = "CAPABLE ✓" if self.is_capable else "NOT CAPABLE ✗"
         return (
-            f"MSA Typ 1 — {self.material} @ {self.reference_thickness:g} nm\n"
+            f"MSA Type 1 — {self.material} @ {self.reference_thickness:g} nm\n"
             f"  n={self.n}  x̄={self.mean:.4f}  s={self.std:.4f}  "
             f"bias={self.bias:.4f}\n"
             f"  Cg={self.cg:.3f}  Cgk={self.cgk:.3f}  "
@@ -54,13 +54,13 @@ class MSAReport:
 
 
 class MSAService:
-    """Computes MSA Typ 1 capability indices. Stateless."""
+    """Stateless MSA Type 1 capability calculator."""
 
     K_DEFAULT:                 int   = 20
     L_DEFAULT:                 int   = 6
     CAPABLE_THRESHOLD_DEFAULT: float = 1.33
 
-    # Minimum repeated measurements for a meaningful Type-1 study —
+    # Minimum repeated measurements for a meaningful Type 1 study.
     # Minitab and ISO 22514-7 both recommend 25.
     MIN_N = 25
 
@@ -84,7 +84,7 @@ class MSAService:
         x = np.asarray(measurements, dtype=np.float64)
         if x.size < self.MIN_N:
             raise ValueError(
-                f"Need at least {self.MIN_N} measurements for MSA Typ 1, "
+                f"Need at least {self.MIN_N} measurements for MSA Type 1, "
                 f"got {x.size}"
             )
         if tolerance <= 0:
@@ -150,8 +150,8 @@ class MSAService:
         self, std: float, bias: float, tolerance: float,
     ) -> tuple[float, float]:
         """
-        Returns (Cg, Cgk). When s is zero a large sentinel is returned so
-        JSON serialisation stays valid.
+        Returns ``(Cg, Cgk)``. When ``std`` is zero a large sentinel is
+        returned so JSON serialisation stays valid.
         """
         if std == 0.0:
             sentinel = 1.0e6

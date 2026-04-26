@@ -12,15 +12,12 @@ logger = logging.getLogger(__name__)
 
 class AppConfig(QObject):
     """
-    Application configuration persisted to config.json next to this file.
+    Persistent application configuration backed by ``config.json``.
 
-    In addition to the user-facing theme / language / window-size settings,
-    the class also exposes a handful of read-only configuration
-    surfaces (wavelength list, default frame count, DB path, plausibility
-    defaults). These are kept in one place so that UI code doesn't have
-    to import service-internal constants — if any of them need to change
-    per deployment, they can be made persisted settings without touching
-    each caller.
+    User-facing settings (theme, language, window size) are persisted.
+    Code-level surfaces (wavelengths, default frame count, DB path,
+    plausibility fallback thresholds) are exposed here so the UI never
+    has to reach into service internals for shared constants.
     """
 
     theme_changed       = pyqtSignal(Theme)
@@ -33,20 +30,16 @@ class AppConfig(QObject):
         "window_size": "1100x800",
     }
 
-    # ---- Non-persisted (code-level) configuration surface -----------
-    # Wavelengths offered in the measurement / calibration dropdowns.
-    # Tuples are (display_label, value_in_um).
+    # ---- Code-level (non-persisted) configuration -------------------
     WAVELENGTHS: tuple[tuple[str, float], ...] = (
         ("Red (635 nm)",   0.635),
         ("Green (532 nm)", 0.532),
     )
-    # Default number of frames to average per capture.
-    FRAME_COUNT_DEFAULT: int   = 30
-    # On-disk SQLite path, relative to the working directory.
-    DB_PATH:             str   = "data/measurements.db"
+    FRAME_COUNT_DEFAULT: int = 30
+    DB_PATH:             str = "data/measurements.db"
 
-    # Plausibility fallback thresholds (applied when no MaterialProfile
-    # is available). Profiles always take precedence.
+    # Fallback plausibility thresholds. MaterialProfile values, when
+    # available, override the warning bands.
     PLAUSIBILITY_SAT_ERR:  float = 254.0
     PLAUSIBILITY_SAT_WARN: float = 240.0
     PLAUSIBILITY_SIG_ERR:  float = 10.0
@@ -54,10 +47,11 @@ class AppConfig(QObject):
 
     def __init__(self):
         super().__init__()
-        # Absolute path: config.json sits next to this config.py file.
         self.config_path = Path(__file__).resolve().parent / "config.json"
         self._config_data: dict = {}
         self.load()
+
+    # ------------------------------------------------------------------
 
     def _get_theme_enum(self, theme_str: str) -> Theme:
         if theme_str == "Dark":
@@ -77,7 +71,6 @@ class AppConfig(QObject):
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     self._config_data = json.load(f)
-                # Back-fill missing keys with defaults.
                 for key, value in self.DEFAULT_CONFIG.items():
                     self._config_data.setdefault(key, value)
             except json.JSONDecodeError:
@@ -99,7 +92,8 @@ class AppConfig(QObject):
         except OSError as e:
             logger.error("Error saving config file: %s", e)
 
-    # --- Theme ---
+    # --- Theme -------------------------------------------------------
+
     @property
     def theme(self) -> str:
         return self._config_data.get("theme", "Auto")
@@ -114,7 +108,8 @@ class AppConfig(QObject):
             self.save()
             self.theme_changed.emit(self.theme_enum)
 
-    # --- Language ---
+    # --- Language ----------------------------------------------------
+
     @property
     def language(self) -> str:
         return self._config_data.get("language", "English")
@@ -125,7 +120,8 @@ class AppConfig(QObject):
             self.save()
             self.language_changed.emit(language_str)
 
-    # --- Window Size ---
+    # --- Window Size -------------------------------------------------
+
     @property
     def window_size(self) -> str:
         return self._config_data.get("window_size", "1100x800")
@@ -137,5 +133,4 @@ class AppConfig(QObject):
             self.window_size_changed.emit(size_str)
 
 
-# Global configuration instance
 cfg = AppConfig()

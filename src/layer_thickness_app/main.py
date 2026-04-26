@@ -1,3 +1,11 @@
+"""
+Application entry point.
+
+Sets up logging, the splash window, the theme and instantiates the
+main controller. Themed Qt stylesheets are loaded from disk and
+re-applied whenever ``cfg.theme_changed`` fires.
+"""
+
 from __future__ import annotations
 
 import sys
@@ -13,10 +21,10 @@ from layer_thickness_app.controller.main_controller import MainController
 from layer_thickness_app.config.config              import cfg
 from qfluentwidgets import setTheme, Theme
 
-# winreg is only available on Windows. Importing it conditionally at
-# module load time keeps is_windows_dark_mode() fast (no per-call import).
+# winreg is only available on Windows. Importing conditionally at module
+# load keeps is_windows_dark_mode() free of per-call import overhead.
 if sys.platform == "win32":
-    import winreg  # noqa: F401 — referenced below via getattr-style access
+    import winreg  # noqa: F401
 else:
     winreg = None  # type: ignore[assignment]
 
@@ -31,10 +39,8 @@ ICON_PATH       = RESOURCES_PATH / "duck_icon.svg"
 
 def setup_logging():
     """
-    Configure the root logger for the whole app.
-
-    Writes to app_log.txt with a 1 MB × 5-backup rotation so the log
-    doesn't grow unbounded across long measurement campaigns.
+    Configure the root logger. Writes to ``app_log.txt`` with a
+    1 MB × 5-backup rotation so the log doesn't grow unbounded.
     """
     rotating = RotatingFileHandler(
         "app_log.txt", maxBytes=1_048_576, backupCount=5, encoding="utf-8",
@@ -50,7 +56,7 @@ def setup_logging():
 
 
 def qt_message_handler(mode, context, message):
-    """Filter out harmless Qt/3rd-party warnings and route the rest to the logger."""
+    """Filter harmless Qt/3rd-party warnings; route the rest to the logger."""
     if "QFont::setPointSize: Point size <= 0" in message:
         return
     if mode == QtMsgType.QtWarningMsg:
@@ -63,7 +69,7 @@ logger = logging.getLogger(__name__)
 
 
 class SplashWindow(QMainWindow):
-    """Simple splash window shown while the main window initialises."""
+    """Borderless splash window shown during main-window construction."""
 
     def __init__(self, image_path: Path):
         super().__init__()
@@ -96,9 +102,8 @@ def load_stylesheet(qss_file: Path) -> str:
         logger.warning("Stylesheet file not found: %s", qss_file)
         return ""
     try:
-        with open(qss_file, "r", encoding="utf-8") as f:
-            return f.read()
-    except Exception as e:
+        return qss_file.read_text(encoding="utf-8")
+    except OSError as e:
         logger.error("Error reading stylesheet %s: %s", qss_file, e)
         return ""
 
@@ -122,10 +127,7 @@ def apply_app_theme(app: QApplication, theme: Theme):
 
 
 def is_windows_dark_mode() -> bool:
-    """
-    Read the Windows 'AppsUseLightTheme' registry value.
-    Returns False on non-Windows platforms or when the key is missing.
-    """
+    """Read 'AppsUseLightTheme' from the Windows registry. False elsewhere."""
     if winreg is None:
         return False
     try:
@@ -140,7 +142,7 @@ def is_windows_dark_mode() -> bool:
 
 def main():
     setup_logging()
-    logger.info("Starting Schichtdickenmessung application...")
+    logger.info("Starting Layer Thickness application...")
     qInstallMessageHandler(qt_message_handler)
 
     app = QApplication(sys.argv)
@@ -154,9 +156,8 @@ def main():
     splash.show()
     app.processEvents()
 
-    # Load config and apply the initial theme before the controller/view
-    # is constructed, so the first paint is already themed.
-    cfg.load()
+    # cfg auto-loads in its constructor; the initial theme can be applied
+    # straight away.
     apply_app_theme(app, cfg.theme_enum)
     cfg.theme_changed.connect(lambda theme_enum: apply_app_theme(app, theme_enum))
 

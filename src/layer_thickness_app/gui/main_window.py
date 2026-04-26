@@ -1,4 +1,11 @@
+"""
+Main application window. Hosts the Fluent navigation pane and
+instantiates one widget per top-level page.
+"""
+
 from __future__ import annotations
+
+import logging
 
 from PyQt6.QtCore import QSize
 from qfluentwidgets import FluentWindow, FluentIcon
@@ -20,9 +27,13 @@ from layer_thickness_app.services.camera_service      import CameraService
 from layer_thickness_app.services.calibration_service import CalibrationService
 from layer_thickness_app.services.msa_service         import MSAService
 
+logger = logging.getLogger(__name__)
+
+APP_TITLE = "Layer Thickness Tool"
+
 
 class MainWindow(FluentWindow):
-    """Main application window with the Fluent-style navigation pane."""
+    """Main window with the Fluent-style navigation pane."""
 
     def __init__(
         self,
@@ -36,9 +47,9 @@ class MainWindow(FluentWindow):
     ):
         super().__init__()
         self.config = config
-        self.setWindowTitle("Schichtdickenmessung")
+        self.setWindowTitle(APP_TITLE)
 
-        # ---- Pages ----------------------------------------------------
+        # Pages
         self.home_interface        = HomePage(camera_service)
         self.measure_interface     = MeasurePage()
         self.history_interface     = HistoryPage(db_service)
@@ -50,7 +61,7 @@ class MainWindow(FluentWindow):
         self.help_interface        = HelpPage()
         self.settings_interface    = SettingsPage(config=self.config)
 
-        # ---- Navigation pane -----------------------------------------
+        # Navigation
         self.addSubInterface(self.home_interface, FluentIcon.HOME, "Home")
         self.navigationInterface.addSeparator()
 
@@ -58,22 +69,20 @@ class MainWindow(FluentWindow):
         self.addSubInterface(self.history_interface, FluentIcon.HISTORY,    "History")
         self.navigationInterface.addSeparator()
 
-        # Testing cluster
+        # Calibration / validation cluster
         self.addSubInterface(self.calibration_interface, FluentIcon.IOT,         "Calibration")
         self.addSubInterface(self.validation_interface,  FluentIcon.CERTIFICATE, "Validation")
         self.navigationInterface.addSeparator()
 
-        self.addSubInterface(self.csv_interface,     FluentIcon.DOCUMENT, "Ex-/Import")
+        self.addSubInterface(self.csv_interface,      FluentIcon.DOCUMENT, "Ex-/Import")
         self.addSubInterface(self.help_interface,     FluentIcon.HELP,    "Help",     position=1)
         self.addSubInterface(self.settings_interface, FluentIcon.SETTING, "Settings", position=1)
 
-        # ---- Config signals ------------------------------------------
+        # Config signals
         self.config.window_size_changed.connect(self.apply_window_size)
-        # Apply persisted size (also sets initial geometry on first run).
         self.apply_window_size(self.config.window_size)
 
     def apply_window_size(self, size_str: str):
-        """Apply the window size specified by AppConfig."""
         max_size = QSize(16777215, 16777215)
         self.setMaximumSize(max_size)
         self.setMinimumSize(0, 0)
@@ -89,9 +98,8 @@ class MainWindow(FluentWindow):
                 self.setFixedSize(w, h)
                 self.move_to_center()
                 return
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).warning(
+            except (ValueError, TypeError) as e:
+                logger.warning(
                     "Invalid window size in config: %s. Error: %s", size_str, e,
                 )
 
