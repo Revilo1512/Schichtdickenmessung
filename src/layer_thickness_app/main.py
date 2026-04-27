@@ -168,6 +168,15 @@ def main():
         controller.show_window()
         splash.close()
 
+    def shutdown():
+        logger.info("Application shutting down -- closing services.")
+        try:
+            controller.shutdown()
+        except Exception as e:
+            logger.exception("Error during shutdown: %s", e)
+
+    app.aboutToQuit.connect(shutdown)
+
     QTimer.singleShot(800, show_main)
     sys.exit(app.exec())
 

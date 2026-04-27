@@ -40,7 +40,11 @@ class DatabaseService:
 
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
             self.conn.row_factory = sqlite3.Row
-            self.conn.execute("PRAGMA journal_mode=WAL")
+            # WAL is faster but leaves -shm/-wal sidecar files around between
+            # runs. DELETE journal mode keeps the working directory clean and
+            # is plenty fast for the single-writer workload here.
+            self.conn.execute("PRAGMA journal_mode=DELETE")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
             self.cursor = self.conn.cursor()
 
             self._create_measurements_table()
@@ -652,4 +656,29 @@ class DatabaseService:
 
     def close(self):
         if self.conn:
-            self.conn.close()
+            try:
+                # Force a checkpoint so any leftover -wal data is folded back
+                # into the main DB file. After TRUNCATE both -wal and -shm
+                # are size-zero (or removed entirely on next open in DELETE
+                # journal mode).
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                self.conn.commit()
+            except sqlite3.Error as e:
+                logger.debug("WAL checkpoint on close failed: %s", e)
+            try:
+                self.conn.close()
+            except sqlite3.Error as e:
+                logger.debug("Error closing DB connection: %s", e)
+            self.conn = None
+            self._cleanup_sidecar_files()
+
+    def _cleanup_sidecar_files(self) -> None:
+        """Remove -wal and -shm files left over from a previous WAL session."""
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(f"{self.db_path}{suffix}")
+            if sidecar.exists():
+                try:
+                    sidecar.unlink()
+                    logger.info("Removed leftover SQLite sidecar: %s", sidecar)
+                except OSError as e:
+                    logger.debug("Could not remove %s: %s", sidecar, e)

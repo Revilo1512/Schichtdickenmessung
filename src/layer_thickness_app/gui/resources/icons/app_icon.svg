@@ -21,6 +21,9 @@
     </linearGradient>
   </defs>
 
+  <!-- White rounded-corner square background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="180" ry="180" fill="#ffffff"/>
+
   <!-- =============================================================== -->
   <!-- INCOMING BEAM (top, bright)                                     -->
   <!-- =============================================================== -->

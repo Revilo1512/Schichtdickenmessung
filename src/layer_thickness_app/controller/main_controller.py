@@ -96,6 +96,22 @@ class MainController:
     def show_window(self):
         self.view.show()
 
+    def shutdown(self) -> None:
+        """
+        Graceful teardown invoked on QApplication.aboutToQuit. Releases
+        the camera and closes the SQLite connection so the WAL/SHM
+        sidecar files don't linger.
+        """
+        try:
+            if self.camera_service.get_status().get("connected"):
+                self.camera_service.disconnect()
+        except Exception as e:
+            logger.debug("Camera disconnect on shutdown failed: %s", e)
+        try:
+            self.db_service.close()
+        except Exception as e:
+            logger.debug("DB close on shutdown failed: %s", e)
+
     # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
@@ -451,12 +467,26 @@ class MainController:
                 "Success", f"Measurement saved (ID {row_id}).",
             )
 
-            if db_data.get("ReferenceThickness") is not None or db_data.get("SessionTag"):
-                try:
-                    self.calibration_page.refresh_data()
-                    self.validation_page.refresh_data()
-                except Exception as e:
-                    logger.debug("Refresh after save failed: %s", e)
+            # Always refresh dependent views after a successful save so
+            # filters, suggestions and tables pick up the new row without
+            # the user having to re-navigate.
+            try:
+                self.calibration_page.refresh_data()
+            except Exception as e:
+                logger.debug("Calibration refresh after save failed: %s", e)
+            try:
+                self.validation_page.refresh_data()
+            except Exception as e:
+                logger.debug("Validation refresh after save failed: %s", e)
+            try:
+                self.history_page.refresh_data()
+            except Exception as e:
+                logger.debug("History refresh after save failed: %s", e)
+            try:
+                self.view.csv_interface._load_filter_suggestions()
+                self.view.csv_interface.on_update_count()
+            except Exception as e:
+                logger.debug("CSV refresh after save failed: %s", e)
 
         except Exception as e:
             logger.exception("Failed to save measurement: %s", e)

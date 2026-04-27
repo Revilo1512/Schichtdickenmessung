@@ -7,17 +7,116 @@ from PyQt6.QtCore    import Qt, QDate, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidgetItem,
     QAbstractItemView, QHeaderView, QInputDialog, QMenu,
+    QDialog, QFormLayout, QDialogButtonBox, QScrollArea,
 )
 from qfluentwidgets import (
     BodyLabel, CaptionLabel, ComboBox, DatePicker,
     PrimaryPushButton, PushButton, TableWidget, ToolButton,
-    FluentIcon, SubtitleLabel, InfoBar, InfoBarPosition, MessageBox,
+    FluentIcon, SubtitleLabel, StrongBodyLabel,
+    InfoBar, InfoBarPosition, MessageBox,
 )
 
 from layer_thickness_app.services.database_service import DatabaseService
-from layer_thickness_app.gui.theme import muted_label_style
+from layer_thickness_app.gui.theme import muted_label_style, FlowLayout
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Detail popup
+# ---------------------------------------------------------------------------
+
+# Field key -> human label. Order is kept stable for predictable layout.
+_DETAIL_FIELDS: list[tuple[str, str]] = [
+    ("Date",               "Date"),
+    ("Name",               "Name"),
+    ("Layer",              "Layer (nm)"),
+    ("ThicknessCorrected", "Corrected (nm)"),
+    ("ReferenceThickness", "Reference (nm)"),
+    ("Wavelength",         "Wavelength (µm)"),
+    ("Mode",               "Mode"),
+    ("FrameCountSample",   "Frames (sample)"),
+    ("FrameCountRef",      "Frames (reference)"),
+    ("MeanGrayRef",        "Mean gray (ref)"),
+    ("MeanGraySample",     "Mean gray (sample)"),
+    ("StdGrayRef",         "Std gray (ref)"),
+    ("StdGraySample",      "Std gray (sample)"),
+    ("Shelf",              "Shelf"),
+    ("Book",               "Book"),
+    ("Page",               "Page"),
+    ("SessionTag",         "Session tag"),
+    ("Probe",              "Probe"),
+    ("RunIndex",           "Run index"),
+    ("RefImage",           "Reference image"),
+    ("MatImage",           "Sample image"),
+    ("Note",               "Note"),
+]
+
+
+def _format_detail_value(key: str, value: Any) -> str:
+    """Stringify a measurement field for the detail popup."""
+    if value is None or value == "":
+        return "—"
+    if key in ("Layer", "ThicknessCorrected") and isinstance(value, (int, float)):
+        return f"{float(value):.4f} nm"
+    if key == "ReferenceThickness" and isinstance(value, (int, float)):
+        return f"{float(value):g} nm"
+    if key == "Wavelength" and isinstance(value, (int, float)):
+        return f"{float(value):.3f} µm"
+    if key in ("MeanGrayRef", "MeanGraySample",
+               "StdGrayRef", "StdGraySample") and isinstance(value, (int, float)):
+        return f"{float(value):.3f}"
+    if key in ("FrameCountRef", "FrameCountSample", "RunIndex") and isinstance(value, (int, float)):
+        return str(int(value))
+    if key == "Date" and isinstance(value, str):
+        return value[:19]
+    return str(value)
+
+
+class MeasurementDetailsDialog(QDialog):
+    """Read-only popup that shows every field of a measurement."""
+
+    def __init__(self, record: dict[str, Any], parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Measurement Details")
+        self.setMinimumWidth(460)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 20, 20, 20)
+        outer.setSpacing(12)
+
+        outer.addWidget(SubtitleLabel("Measurement Details"))
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        host = QWidget()
+        form = QFormLayout(host)
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+
+        for key, label in _DETAIL_FIELDS:
+            text = _format_detail_value(key, record.get(key))
+            value_lbl = BodyLabel(text)
+            value_lbl.setWordWrap(True)
+            value_lbl.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            form.addRow(StrongBodyLabel(f"{label}:"), value_lbl)
+
+        scroll.setWidget(host)
+        outer.addWidget(scroll, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, self)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        # The default Close button triggers ``rejected``; map both signals
+        # so either Esc or the button closes the dialog.
+        buttons.button(QDialogButtonBox.StandardButton.Close).clicked.connect(
+            self.accept
+        )
+        outer.addWidget(buttons)
 
 
 class HistoryPage(QWidget):
@@ -28,27 +127,21 @@ class HistoryPage(QWidget):
 
     data_changed = pyqtSignal()
 
-    # Column indices
-    _COL_ID        = 0
-    _COL_DATE      = 1
-    _COL_NAME      = 2
-    _COL_LAYER     = 3
-    _COL_CORRECTED = 4
-    _COL_REF       = 5
-    _COL_WAVE      = 6
-    _COL_MODE      = 7
-    _COL_FRAMES    = 8
-    _COL_SHELF     = 9
-    _COL_BOOK      = 10
-    _COL_PAGE      = 11
-    _COL_SESSION   = 12
-    _COL_NOTE      = 13
+    # Visible columns kept deliberately small. Less-relevant fields
+    # (id, frames, shelf, full notes) live in the row-detail popup.
+    _COL_DATE      = 0
+    _COL_NAME      = 1
+    _COL_LAYER     = 2
+    _COL_CORRECTED = 3
+    _COL_REF       = 4
+    _COL_WAVE      = 5
+    _COL_MODE      = 6
+    _COL_BOOK      = 7
+    _COL_PAGE      = 8
+    _COL_SESSION   = 9
 
-    # Map table columns to DB columns. Frames is rendered from
-    # FrameCountSample (the noise-relevant value) but uses a virtual key
-    # so _build_item formats it specially.
+    # Map table columns to DB columns.
     _COL_DB_KEY: dict[int, str | None] = {
-        _COL_ID:        "id",
         _COL_DATE:      "Date",
         _COL_NAME:      "Name",
         _COL_LAYER:     "Layer",
@@ -56,23 +149,23 @@ class HistoryPage(QWidget):
         _COL_REF:       "ReferenceThickness",
         _COL_WAVE:      "Wavelength",
         _COL_MODE:      "Mode",
-        _COL_FRAMES:    "FrameCountSample",
-        _COL_SHELF:     "Shelf",
         _COL_BOOK:      "Book",
         _COL_PAGE:      "Page",
         _COL_SESSION:   "SessionTag",
-        _COL_NOTE:      "Note",
     }
 
     _COL_LABELS = [
-        "ID",         "Date",       "Name",       "Layer (nm)",
+        "Date",       "Name",       "Layer (nm)",
         "Corr. (nm)", "Ref (nm)",   "λ (µm)",
-        "Mode",       "Frames",     "Shelf",      "Book",
-        "Page",       "Session",    "Note",
+        "Mode",       "Book",       "Page",      "Session",
     ]
 
-    # Cells that the user can edit inline.
-    _EDITABLE_COLS = frozenset({_COL_REF, _COL_SESSION, _COL_NOTE})
+    # The DB id is hidden but stored as UserRole data on the Date item.
+    _ROW_ID_COL = _COL_DATE
+    _ROW_ID_ROLE = Qt.ItemDataRole.UserRole
+
+    # Cells the user can edit via the right-click context menu.
+    _EDITABLE_COLS = frozenset({_COL_REF, _COL_SESSION})
 
     def __init__(self, db_service: DatabaseService, parent: QWidget | None = None):
         super().__init__(parent)
@@ -96,7 +189,7 @@ class HistoryPage(QWidget):
     # ==================================================================
 
     def _init_widgets(self):
-        self.filter_title   = SubtitleLabel("Filters")
+        self.page_title   = SubtitleLabel("History")
 
         self.name_filter    = ComboBox(self); self.name_filter.setPlaceholderText("Filter by name...")
         self.start_date_filter = DatePicker(self); self.start_date_filter.setDate(QDate(2024, 1, 1))
@@ -122,21 +215,19 @@ class HistoryPage(QWidget):
 
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(self._COL_NOTE, QHeaderView.ResizeMode.Stretch)
+        # Session column stretches to fill leftover horizontal space so
+        # nothing is shortened with "..." anywhere visible.
+        header.setSectionResizeMode(self._COL_SESSION, QHeaderView.ResizeMode.Stretch)
 
-        self.table.setColumnWidth(self._COL_ID,        50)
         self.table.setColumnWidth(self._COL_DATE,      150)
-        self.table.setColumnWidth(self._COL_NAME,      100)
-        self.table.setColumnWidth(self._COL_LAYER,     85)
-        self.table.setColumnWidth(self._COL_CORRECTED, 85)
-        self.table.setColumnWidth(self._COL_REF,       80)
-        self.table.setColumnWidth(self._COL_WAVE,      65)
-        self.table.setColumnWidth(self._COL_MODE,      60)
-        self.table.setColumnWidth(self._COL_FRAMES,    65)
-        self.table.setColumnWidth(self._COL_SHELF,     70)
-        self.table.setColumnWidth(self._COL_BOOK,      70)
-        self.table.setColumnWidth(self._COL_PAGE,      70)
-        self.table.setColumnWidth(self._COL_SESSION,  110)
+        self.table.setColumnWidth(self._COL_NAME,      110)
+        self.table.setColumnWidth(self._COL_LAYER,     95)
+        self.table.setColumnWidth(self._COL_CORRECTED, 95)
+        self.table.setColumnWidth(self._COL_REF,       85)
+        self.table.setColumnWidth(self._COL_WAVE,      70)
+        self.table.setColumnWidth(self._COL_MODE,      70)
+        self.table.setColumnWidth(self._COL_BOOK,      80)
+        self.table.setColumnWidth(self._COL_PAGE,      80)
 
         self.prev_button = ToolButton(FluentIcon.LEFT_ARROW,  self)
         self.next_button = ToolButton(FluentIcon.RIGHT_ARROW, self)
@@ -148,28 +239,26 @@ class HistoryPage(QWidget):
         root.setContentsMargins(40, 20, 40, 20)
         root.setSpacing(15)
 
-        row1 = QHBoxLayout()
-        row1.addWidget(self.filter_title)
-        row1.addStretch(1)
-        row1.addWidget(BodyLabel("Name:", self))
-        row1.addWidget(self.name_filter, 1)
-        row1.addSpacing(10)
-        row1.addWidget(BodyLabel("From:", self)); row1.addWidget(self.start_date_filter)
-        row1.addSpacing(5)
-        row1.addWidget(BodyLabel("To:", self));   row1.addWidget(self.end_date_filter)
+        # Page title (matches the Validation page style)
+        root.addWidget(self.page_title)
 
-        row2 = QHBoxLayout()
-        row2.addStretch(1)
-        row2.addWidget(BodyLabel("Sort:", self))
-        row2.addWidget(self.sort_order_combo)
-        row2.addSpacing(10)
-        row2.addWidget(self.filter_button)
-        row2.addWidget(self.reset_button)
-        row2.addWidget(self.refresh_button)
-        row2.addWidget(self.delete_button)
+        # Filters wrap to a second row at narrow widths.
+        filter_host = QWidget(self)
+        flow = FlowLayout(filter_host, margin=0, h_spacing=10, v_spacing=8)
+        flow.addWidget(self._make_field("Name:",  self.name_filter))
+        flow.addWidget(self._make_field("From:",  self.start_date_filter))
+        flow.addWidget(self._make_field("To:",    self.end_date_filter))
+        flow.addWidget(self._make_field("Sort:",  self.sort_order_combo))
+        flow.addWidget(self.filter_button)
+        flow.addWidget(self.reset_button)
+        flow.addWidget(self.refresh_button)
+        flow.addWidget(self.delete_button)
+        root.addWidget(filter_host)
 
         hint = CaptionLabel(
-            "Tip: double-click a row in Ref, Session or Note to edit.", self,
+            "Tip: click a row to view full details. "
+            "Right-click for edit / delete.",
+            self,
         )
         hint.setStyleSheet(muted_label_style())
 
@@ -180,11 +269,20 @@ class HistoryPage(QWidget):
         nav.addWidget(self.next_button)
         nav.addStretch(1)
 
-        root.addLayout(row1)
-        root.addLayout(row2)
         root.addWidget(hint)
         root.addWidget(self.table, 1)
         root.addLayout(nav)
+
+    @staticmethod
+    def _make_field(label_text: str, widget: QWidget) -> QWidget:
+        """Label + control bundled so a flow layout never splits the pair."""
+        host = QWidget()
+        h = QHBoxLayout(host)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        h.addWidget(BodyLabel(label_text))
+        h.addWidget(widget)
+        return host
 
     def _connect_signals(self):
         self.filter_button.clicked.connect(self._on_filter_apply)
@@ -215,6 +313,11 @@ class HistoryPage(QWidget):
         self._refresh_data()
 
     def _on_full_refresh(self):
+        self._load_name_suggestions()
+        self._refresh_data()
+
+    def refresh_data(self) -> None:
+        """Public hook used by the controller when measurements change."""
         self._load_name_suggestions()
         self._refresh_data()
 
@@ -293,6 +396,11 @@ class HistoryPage(QWidget):
                 for col_idx, db_key in self._COL_DB_KEY.items():
                     value = record.get(db_key) if db_key else ""
                     item  = self._build_item(col_idx, db_key, value)
+                    if col_idx == self._ROW_ID_COL:
+                        # Stash the DB id on the row's date cell — kept
+                        # off-screen so users don't see it but recoverable
+                        # by every action that needs it.
+                        item.setData(self._ROW_ID_ROLE, record.get("id"))
                     self.table.setItem(row_idx, col_idx, item)
         finally:
             self.table.setUpdatesEnabled(True)
@@ -302,7 +410,7 @@ class HistoryPage(QWidget):
     ) -> QTableWidgetItem:
         empty_with_dash = (
             "ReferenceThickness", "ThicknessCorrected",
-            "SessionTag", "Note", "Mode", "FrameCountSample",
+            "SessionTag", "Mode",
         )
         if value is None or value == "":
             text = "—" if db_key in empty_with_dash else ""
@@ -316,13 +424,14 @@ class HistoryPage(QWidget):
             text = f"{value:.3f}"
         elif db_key == "Date" and isinstance(value, str):
             text = value[:19]
-        elif db_key == "FrameCountSample" and isinstance(value, (int, float)):
-            text = str(int(value))
         else:
             text = str(value)
 
         item = QTableWidgetItem(text)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Full text on hover so nothing is silently truncated.
+        if text and text != "—":
+            item.setToolTip(text)
         return item
 
     # ==================================================================
@@ -378,17 +487,18 @@ class HistoryPage(QWidget):
     # ==================================================================
 
     def _on_cell_double_clicked(self, row: int, col: int) -> None:
-        if col not in self._EDITABLE_COLS:
-            return
-        self._edit_cell(row, col)
+        # Double-click anywhere in the row opens the full-record popup.
+        self._show_details_popup(row)
 
     def _on_context_menu(self, pos) -> None:
         index = self.table.indexAt(pos)
         if not index.isValid():
             return
-        row, col = index.row(), index.column()
+        row, _col = index.row(), index.column()
 
         menu = QMenu(self.table)
+        act_view      = menu.addAction("View Details…")
+        menu.addSeparator()
         act_edit_ref  = menu.addAction("Edit Reference Thickness…")
         act_edit_ses  = menu.addAction("Edit Session Tag…")
         act_edit_note = menu.addAction("Edit Note…")
@@ -398,21 +508,30 @@ class HistoryPage(QWidget):
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
         if action is None:
             return
+        if action is act_view:      self._show_details_popup(row)
         if action is act_edit_ref:  self._edit_cell(row, self._COL_REF)
         if action is act_edit_ses:  self._edit_cell(row, self._COL_SESSION)
-        if action is act_edit_note: self._edit_cell(row, self._COL_NOTE)
+        if action is act_edit_note: self._edit_cell(row, "_NOTE")
         if action is act_delete:    self._delete_single(row)
 
     def _row_id(self, row: int) -> int | None:
-        item = self.table.item(row, self._COL_ID)
+        item = self.table.item(row, self._ROW_ID_COL)
         if item is None:
             return None
+        val = item.data(self._ROW_ID_ROLE)
+        if val is None:
+            return None
         try:
-            return int(item.text())
-        except ValueError:
+            return int(val)
+        except (TypeError, ValueError):
             return None
 
-    def _edit_cell(self, row: int, col: int) -> None:
+    def _edit_cell(self, row: int, col_or_key) -> None:
+        """
+        Pop the appropriate small dialog and write the new value back.
+        ``col_or_key`` is either a visible column index (REF/SESSION) or
+        the sentinel ``"_NOTE"`` for the off-table Note field.
+        """
         row_id = self._row_id(row)
         if row_id is None:
             return
@@ -422,13 +541,8 @@ class HistoryPage(QWidget):
                                 is_error=True)
             return
 
-        db_key = self._COL_DB_KEY[col]
-        if db_key is None:
-            return
-
-        current_value = record.get(db_key)
-
-        if col == self._COL_REF:
+        if col_or_key == self._COL_REF:
+            current_value = record.get("ReferenceThickness")
             new_val, ok = QInputDialog.getDouble(
                 self, "Edit Reference Thickness",
                 "Reference thickness (nm). Enter 0 or leave blank to clear:",
@@ -441,7 +555,8 @@ class HistoryPage(QWidget):
                 return
             new_db_value: Any = None if new_val <= 0 else float(new_val)
             column_to_update  = "ReferenceThickness"
-        elif col == self._COL_SESSION:
+        elif col_or_key == self._COL_SESSION:
+            current_value = record.get("SessionTag")
             new_val, ok = QInputDialog.getText(
                 self, "Edit Session Tag",
                 "Session tag (leave empty to clear):",
@@ -451,7 +566,8 @@ class HistoryPage(QWidget):
                 return
             new_db_value = new_val.strip() or None
             column_to_update = "SessionTag"
-        elif col == self._COL_NOTE:
+        elif col_or_key == "_NOTE":
+            current_value = record.get("Note")
             new_val, ok = QInputDialog.getText(
                 self, "Edit Note", "Note:",
                 text=str(current_value or ""),
@@ -514,6 +630,22 @@ class HistoryPage(QWidget):
         else:
             self._show_info_bar("Error", "Could not delete that row.",
                                 is_error=True)
+
+    # ==================================================================
+    # Detail popup
+    # ==================================================================
+
+    def _show_details_popup(self, row: int) -> None:
+        row_id = self._row_id(row)
+        if row_id is None:
+            return
+        record = self.db_service.get_measurement(row_id)
+        if record is None:
+            self._show_info_bar("Error", "Row not found in database.",
+                                is_error=True)
+            return
+        dlg = MeasurementDetailsDialog(record, self)
+        dlg.exec()
 
     # ==================================================================
     # Helpers
