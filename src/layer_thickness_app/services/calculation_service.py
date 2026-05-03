@@ -91,29 +91,35 @@ class CalculationService:
         material_path = f"{shelf}/{book}/{page}"
         logger.info(
             "calculate_thickness_from_captures | material=%s | λ=%.4f µm | "
-            "ref_gray=%.3f (σ=%.3f, n=%d) | mat_gray=%.3f (σ=%.3f, n=%d)",
+            "ref_gray=%.3f hotspot=%.3f sat=%.4f n=%d | "
+            "mat_gray=%.3f hotspot=%.3f sat=%.4f n=%d",
             material_path, wavelength_um,
-            ref_result.gray_mean, ref_result.gray_std, ref_result.frames_used,
-            mat_result.gray_mean, mat_result.gray_std, mat_result.frames_used,
+            ref_result.gray_mean, ref_result.hotspot_mean,
+            ref_result.saturated_fraction, ref_result.frames_used,
+            mat_result.gray_mean, mat_result.hotspot_mean,
+            mat_result.saturated_fraction, mat_result.frames_used,
         )
 
         # ── 2. Capture stats (returned even on early failure) ────────
-        frame_count = ref_result.frame_count  # == mat_result.frame_count
+        frame_count = ref_result.frame_count
         capture_stats: dict[str, Any] = {
-            # DB-bound keys — consumed by save_measurement
-            "MeanGrayRef":       round(ref_result.gray_mean, 4),
-            "MeanGraySample":    round(mat_result.gray_mean, 4),
-            "StdGrayRef":        round(ref_result.gray_std,  4),
-            "StdGraySample":     round(mat_result.gray_std,  4),
-            "FrameCountRef":     ref_result.frame_count,
-            "FrameCountSample":  mat_result.frame_count,
-            "Mode":              "multi" if frame_count > 1 else "single",
+            "MeanGrayRef":          round(ref_result.gray_mean, 4),
+            "MeanGraySample":       round(mat_result.gray_mean, 4),
+            "StdGrayRef":           round(ref_result.gray_std,  4),
+            "StdGraySample":        round(mat_result.gray_std,  4),
+            "HotspotRef":           round(ref_result.hotspot_mean, 4),
+            "HotspotSample":        round(mat_result.hotspot_mean, 4),
+            "SaturatedFractionRef": round(ref_result.saturated_fraction, 6),
+            "SaturatedFractionSample": round(mat_result.saturated_fraction, 6),
+            "FrameCountRef":        ref_result.frame_count,
+            "FrameCountSample":     mat_result.frame_count,
+            "Mode":                 "multi" if frame_count > 1 else "single",
         }
 
         # ── 3. Plausibility gate ─────────────────────────────────────
-        plaus = self.plausibility.check_pair(
-            ref_gray_mean    = ref_result.gray_mean,
-            sample_gray_mean = mat_result.gray_mean,
+        plaus = self.plausibility.check_pair_captures(
+            reference_capture = ref_result,
+            sample_capture    = mat_result,
         )
         self._attach_plausibility(capture_stats, plaus)
 

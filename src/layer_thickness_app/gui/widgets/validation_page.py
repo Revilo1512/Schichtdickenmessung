@@ -184,13 +184,15 @@ class ValidationPage(QWidget):
         form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
         labels: dict[str, BodyLabel] = {
-            "n":      BodyLabel("—"),
-            "mean":   BodyLabel("—"),
-            "std":    BodyLabel("—"),
-            "bias":   BodyLabel("—"),
-            "cg":     BodyLabel("—"),
-            "cgk":    BodyLabel("—"),
-            "status": BodyLabel("—"),
+            "n":       BodyLabel("—"),
+            "mean":    BodyLabel("—"),
+            "std":     BodyLabel("—"),
+            "bias":    BodyLabel("—"),
+            "cg":      BodyLabel("—"),
+            "cgk":     BodyLabel("—"),
+            "pct_var": BodyLabel("—"),
+            "ttest":   BodyLabel("—"),
+            "status":  BodyLabel("—"),
         }
 
         form.addRow(StrongBodyLabel("n:"),         labels["n"])
@@ -199,6 +201,8 @@ class ValidationPage(QWidget):
         form.addRow(StrongBodyLabel("Bias:"),      labels["bias"])
         form.addRow(StrongBodyLabel("Cg:"),        labels["cg"])
         form.addRow(StrongBodyLabel("Cgk:"),       labels["cgk"])
+        form.addRow(StrongBodyLabel("%Var (rep / rep+bias):"), labels["pct_var"])
+        form.addRow(StrongBodyLabel("Bias t-test (t / p):"),   labels["ttest"])
         form.addRow(StrongBodyLabel("Capable?:"),  labels["status"])
 
         outer.addLayout(form)
@@ -474,6 +478,13 @@ class ValidationPage(QWidget):
         labels["bias"].setText(f"{report.bias:.4f} nm")
         labels["cg"].setText(f"{report.cg:.3f}")
         labels["cgk"].setText(f"{report.cgk:.3f}")
+        labels["pct_var"].setText(
+            f"{report.pct_var_repeat:.2f} %  /  "
+            f"{report.pct_var_repeat_and_bias:.2f} %"
+        )
+        labels["ttest"].setText(
+            f"t = {report.t_stat:.3f}   p = {report.p_value:.4f}"
+        )
 
         labels["cg"].setStyleSheet(self._strong_color_style(
             COLOR_SUCCESS if report.cg_capable else COLOR_ERROR

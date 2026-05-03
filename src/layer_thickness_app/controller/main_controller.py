@@ -191,9 +191,9 @@ class MainController:
         else:
             self.measurement_page.set_profile_caption(
                 f"Profile: {profile.label} "
-                f"(sat_warn={profile.saturation_warn:.0f}, "
-                f"sig_warn={profile.signal_warn:.0f}, "
-                f"sig_err={profile.signal_err:.0f})"
+                f"(sat_frac_warn={profile.saturation_frac_warn:.4f}, "
+                f"hotspot_warn={profile.hotspot_warn:.0f}, "
+                f"hotspot_err={profile.hotspot_err:.0f})"
             )
             lo, hi = profile.expected_range_nm
             self.measurement_page.set_reference_thickness_hint(lo, hi)
@@ -238,7 +238,7 @@ class MainController:
         self.measurement_page.set_result_text("Result...")
         self.measurement_page.set_calculation_enabled(True)
         self._surface_plausibility(
-            self.plausibility_service.check_reference(capture.gray_mean)
+            self.plausibility_service.check_reference_capture(capture)
         )
 
     def on_take_material_image(self):
@@ -260,12 +260,9 @@ class MainController:
         self.measurement_page.set_result_text("Result...")
         self.measurement_page.set_calculation_enabled(True)
 
-        ref_gray = None
-        ref_cap  = self.measurement_page.reference_capture
-        if ref_cap is not None:
-            ref_gray = ref_cap.gray_mean
+        ref_cap = self.measurement_page.reference_capture
         self._surface_plausibility(
-            self.plausibility_service.check_sample(capture.gray_mean, ref_gray)
+            self.plausibility_service.check_sample_capture(capture, ref_cap)
         )
 
     # ------------------------------------------------------------------
