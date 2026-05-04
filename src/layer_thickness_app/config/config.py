@@ -23,11 +23,17 @@ class AppConfig(QObject):
     theme_changed       = pyqtSignal(Theme)
     language_changed    = pyqtSignal(str)
     window_size_changed = pyqtSignal(str)
+    # Emitted with the new exposure in ms (float). Signals subscribers
+    # that the value has been written to disk.
+    camera_exposure_changed = pyqtSignal(float)
 
     DEFAULT_CONFIG = {
-        "theme":       "Auto",
-        "language":    "English",
-        "window_size": "1100x800",
+        "theme":              "Auto",
+        "language":           "English",
+        "window_size":        "1100x800",
+        # None = "use whatever default the camera firmware ships with".
+        # A float overrides on every connect.
+        "camera_exposure_ms": None,
     }
 
     # ---- Code-level (non-persisted) configuration -------------------
@@ -140,6 +146,37 @@ class AppConfig(QObject):
             self._config_data["window_size"] = size_str
             self.save()
             self.window_size_changed.emit(size_str)
+
+    # --- Camera exposure ---------------------------------------------
+
+    @property
+    def camera_exposure_ms(self) -> float | None:
+        """
+        Persisted camera exposure time in milliseconds, or None if no
+        override has been set (camera default applies).
+        """
+        v = self._config_data.get("camera_exposure_ms")
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid camera_exposure_ms in config (%r); ignoring.", v,
+            )
+            return None
+
+    def set_camera_exposure_ms(self, value_ms: float | None) -> None:
+        """Persist a camera exposure override. Pass None to clear it."""
+        if value_ms is None:
+            self._config_data["camera_exposure_ms"] = None
+        else:
+            self._config_data["camera_exposure_ms"] = float(value_ms)
+        self.save()
+        # Emit only for non-null updates so listeners don't have to
+        # special-case "clear".
+        if value_ms is not None:
+            self.camera_exposure_changed.emit(float(value_ms))
 
 
 cfg = AppConfig()
