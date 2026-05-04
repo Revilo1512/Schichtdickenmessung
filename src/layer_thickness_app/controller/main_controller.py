@@ -191,9 +191,8 @@ class MainController:
         else:
             self.measurement_page.set_profile_caption(
                 f"Profile: {profile.label} "
-                f"(sat_frac_warn={profile.saturation_frac_warn:.4f}, "
-                f"hotspot_warn={profile.hotspot_warn:.0f}, "
-                f"hotspot_err={profile.hotspot_err:.0f})"
+                f"(sat_frac_err={profile.saturation_frac_err:.4f}, "
+                f"gray_mean_min={profile.gray_mean_min:.2f})"
             )
             lo, hi = profile.expected_range_nm
             self.measurement_page.set_reference_thickness_hint(lo, hi)
@@ -331,13 +330,6 @@ class MainController:
             thickness_nm,
             f"{corrected_nm:.4f} nm" if corrected_nm is not None else "-",
         )
-
-        if capture_stats.get("plausibility_severity") == PlausibilitySeverity.WARNING.value:
-            self.measurement_page.show_info_bar(
-                title      = capture_stats.get("plausibility_title", "Warning"),
-                content    = capture_stats.get("plausibility_message", ""),
-                is_warning = True,
-            )
 
         if ui["save_checked"]:
             self._save_measurement_to_db(

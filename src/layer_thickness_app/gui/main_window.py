@@ -50,7 +50,7 @@ class MainWindow(FluentWindow):
         self.setWindowTitle(APP_TITLE)
 
         # Pages
-        self.home_interface        = HomePage(camera_service)
+        self.home_interface        = HomePage(camera_service, config)
         self.measure_interface     = MeasurePage()
         self.history_interface     = HistoryPage(db_service)
         self.calibration_interface = CalibrationPage(db_service, calibration_service)

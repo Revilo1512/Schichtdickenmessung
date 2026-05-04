@@ -8,18 +8,17 @@ expected-range and wavelength defaults for the selected material.
 
 Operator notes
 --------------
-* ``saturation_frac_warn`` — capture 10 references with no probe in the
-  beam, note the maximum ``saturated_fraction`` observed, and set the
-  warn threshold to a value just above that. Don't exceed the err
-  threshold; clipped pixels in the spot invalidate the measurement.
-* ``hotspot_warn`` / ``hotspot_err`` — minimum acceptable spot intensity
-  (mean over the top 0.5 % of pixels). For the thickest layer in your
-  campaign, the spot should still sit comfortably above the warn
-  threshold; if it drops below ``hotspot_err`` the Beer-Lambert output
-  is dominated by sensor noise.
+* ``saturation_frac_err`` — capture 10 references with no probe in the
+  beam and note the maximum ``saturated_fraction`` observed. Set the
+  threshold to a value above that. Clipped pixels invalidate the
+  measurement.
+* ``gray_mean_min`` — minimum full-image gray mean (ITU-R 601) below
+  which the signal is indistinguishable from sensor noise. Capture a
+  frame with the laser off and note the gray mean; the threshold
+  should sit above this dark-current level.
 * ``expected_range_nm`` — the (min, max) thickness range you expect for
   this material. Used to pre-populate the reference-thickness input and
-  to hint at the Beer-Lambert measurable range in messages.
+  to hint at the measurable range in messages.
 * ``supported_wavelengths_um`` — the wavelengths verified for this
   material against this catalog entry. Used to cross-check the user's
   selection.
@@ -40,10 +39,8 @@ class MaterialProfile:
     label:                     str
     supported_wavelengths_um:  tuple[float, ...]
     expected_range_nm:         tuple[float, float]
-    saturation_frac_warn:      float
     saturation_frac_err:       float
-    hotspot_warn:              float
-    hotspot_err:               float
+    gray_mean_min:             float
     notes:                     str = ""
 
 
@@ -59,24 +56,20 @@ PROFILES: dict[tuple[str, str, str], MaterialProfile] = {
         label                    = "Cu (Johnson & Christy)",
         supported_wavelengths_um = (0.635, 0.532),
         expected_range_nm        = (20.0, 120.0),
-        saturation_frac_warn     = 0.0010,
         saturation_frac_err      = 0.0050,
-        hotspot_warn             = 50.0,
-        hotspot_err              = 25.0,
-        notes                    = "Tune saturation_frac_warn against your beam intensity.",
+        gray_mean_min            = 0.5,
+        notes                    = "Tune saturation_frac_err against your beam intensity.",
     ),
 
     ("main", "Ti", "Rakic-LD"): MaterialProfile(
         shelf                    = "main",
         book                     = "Ti",
         page                     = "Rakic-LD",
-        label                    = "Ti (Rakić Lorentz-Drude)",
+        label                    = "Ti (Rakic Lorentz-Drude)",
         supported_wavelengths_um = (0.635, 0.532),
         expected_range_nm        = (15.0, 100.0),
-        saturation_frac_warn     = 0.0010,
         saturation_frac_err      = 0.0050,
-        hotspot_warn             = 50.0,
-        hotspot_err              = 25.0,
+        gray_mean_min            = 0.5,
         notes                    = "Ti absorbs more strongly than Cu at 635 nm.",
     ),
 }

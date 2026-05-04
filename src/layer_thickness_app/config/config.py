@@ -23,11 +23,17 @@ class AppConfig(QObject):
     theme_changed       = pyqtSignal(Theme)
     language_changed    = pyqtSignal(str)
     window_size_changed = pyqtSignal(str)
+    # Emitted with the new exposure in ms (float). Signals subscribers
+    # that the value has been written to disk.
+    camera_exposure_changed = pyqtSignal(float)
 
     DEFAULT_CONFIG = {
-        "theme":       "Auto",
-        "language":    "English",
-        "window_size": "1100x800",
+        "theme":              "Auto",
+        "language":           "English",
+        "window_size":        "1100x800",
+        # None = "use whatever default the camera firmware ships with".
+        # A float overrides on every connect.
+        "camera_exposure_ms": None,
     }
 
     # ---- Code-level (non-persisted) configuration -------------------
@@ -38,21 +44,17 @@ class AppConfig(QObject):
     FRAME_COUNT_DEFAULT: int = 30
     DB_PATH:             str = "data/measurements.db"
 
-    # Plausibility thresholds. The transmission setup produces a small
-    # bright spot in an otherwise dark frame, so saturation and signal
-    # strength are derived from the spot, not the global gray mean.
+    # Plausibility thresholds.  All checks use the full-image gray mean
+    # (ITU-R 601 luminance averaged over every pixel).
     #
-    # Saturation is detected by the fraction of pixels at or above 254;
-    # a tiny clipped patch in the centre is enough to invalidate the
-    # measurement, so the error threshold is conservative.
-    PLAUSIBILITY_SAT_FRAC_ERR:  float = 0.0050
-    PLAUSIBILITY_SAT_FRAC_WARN: float = 0.0010
+    # Saturated-pixel fraction: the share of pixels at or above 254.
+    # Even a small clipped region invalidates the measurement.
+    PLAUSIBILITY_SAT_FRAC_ERR: float = 0.0050
 
-    # Signal strength is the mean over the top 0.5 % of pixels (the
-    # laser spot). For thick layers most of the frame is dark, but the
-    # spot itself must remain well above the sensor noise floor.
-    PLAUSIBILITY_HOTSPOT_ERR:  float = 25.0
-    PLAUSIBILITY_HOTSPOT_WARN: float = 50.0
+    # Minimum full-image gray mean.  Below this threshold the signal is
+    # indistinguishable from sensor noise and no meaningful thickness
+    # can be calculated.
+    PLAUSIBILITY_GRAY_MEAN_MIN: float = 0.5
 
     def __init__(self):
         super().__init__()
@@ -140,6 +142,37 @@ class AppConfig(QObject):
             self._config_data["window_size"] = size_str
             self.save()
             self.window_size_changed.emit(size_str)
+
+    # --- Camera exposure ---------------------------------------------
+
+    @property
+    def camera_exposure_ms(self) -> float | None:
+        """
+        Persisted camera exposure time in milliseconds, or None if no
+        override has been set (camera default applies).
+        """
+        v = self._config_data.get("camera_exposure_ms")
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid camera_exposure_ms in config (%r); ignoring.", v,
+            )
+            return None
+
+    def set_camera_exposure_ms(self, value_ms: float | None) -> None:
+        """Persist a camera exposure override. Pass None to clear it."""
+        if value_ms is None:
+            self._config_data["camera_exposure_ms"] = None
+        else:
+            self._config_data["camera_exposure_ms"] = float(value_ms)
+        self.save()
+        # Emit only for non-null updates so listeners don't have to
+        # special-case "clear".
+        if value_ms is not None:
+            self.camera_exposure_changed.emit(float(value_ms))
 
 
 cfg = AppConfig()

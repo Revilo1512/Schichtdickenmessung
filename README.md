@@ -190,7 +190,7 @@ Schichtdickenmessung/
 │       │       └── settings_page.py
 │       └── services/
 │           ├── camera_service.py         # frame capture + outlier rejection
-│           ├── image_stats.py            # hotspot / saturated-fraction stats
+│           ├── image_stats.py            # full-image gray / saturated-fraction stats
 │           ├── calculation_service.py    # Beer–Lambert + sRGB linearisation
 │           ├── plausibility_service.py   # saturation / signal / range checks
 │           ├── calibration_service.py    # linear-regression correction model
@@ -248,9 +248,7 @@ attributes:
 |---|---|---|
 | `FRAME_COUNT_DEFAULT` | 30 | Default frames per multi-frame capture |
 | `PLAUSIBILITY_SAT_FRAC_ERR` | 0.0050 | Saturated-pixel fraction error threshold |
-| `PLAUSIBILITY_SAT_FRAC_WARN` | 0.0010 | Saturated-pixel fraction warning threshold |
-| `PLAUSIBILITY_HOTSPOT_ERR` | 25.0 | Minimum hotspot intensity (top-1% pixels) |
-| `PLAUSIBILITY_HOTSPOT_WARN` | 50.0 | Hotspot warning threshold |
+| `PLAUSIBILITY_GRAY_MEAN_MIN` | 0.5 | Minimum full-image gray mean (noise floor) |
 | `WAVELENGTHS` | 635 nm, 532 nm | Selectable wavelengths |
 | `DB_PATH` | `data/measurements.db` | SQLite file location |
 

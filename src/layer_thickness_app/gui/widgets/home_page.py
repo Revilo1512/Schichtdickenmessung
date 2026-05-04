@@ -12,6 +12,7 @@ from typing import Any
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFrame, QFormLayout, QLabel,
+    QDoubleSpinBox,
 )
 from PyQt6.QtGui import QPixmap
 from qfluentwidgets import (
@@ -20,6 +21,7 @@ from qfluentwidgets import (
     InfoBar, InfoBarPosition, IconWidget, StrongBodyLabel, SubtitleLabel,
 )
 
+from layer_thickness_app.config.config import AppConfig
 from layer_thickness_app.services.camera_service import CameraService
 from layer_thickness_app.gui.theme import (
     card_style, status_label_style,
@@ -30,17 +32,26 @@ logger = logging.getLogger(__name__)
 BASE_DIR   = Path(__file__).resolve().parent.parent
 IMAGE_PATH = BASE_DIR / "resources" / "measurement_device.jpg"
 
-_STATUS_PANEL_OBJECT_NAME = "status_card_content"
-_WELCOME_CARD_OBJECT_NAME = "home_welcome_card"
-_IMAGE_CARD_OBJECT_NAME   = "home_image_card"
+_STATUS_PANEL_OBJECT_NAME   = "status_card_content"
+_WELCOME_CARD_OBJECT_NAME   = "home_welcome_card"
+_IMAGE_CARD_OBJECT_NAME     = "home_image_card"
+_EXPOSURE_PANEL_OBJECT_NAME = "exposure_card_content"
+
+# Default range when the camera hasn't reported its actual range yet
+# (e.g. before the first connect). Real bounds replace these once the
+# hardware is queried.
+_EXPOSURE_DEFAULT_MIN  = 0.01
+_EXPOSURE_DEFAULT_MAX  = 1000.0
+_EXPOSURE_DEFAULT_STEP = 0.1
 
 
 class HomePage(QWidget):
     """Dashboard homepage."""
 
-    def __init__(self, camera_service: CameraService):
+    def __init__(self, camera_service: CameraService, config: AppConfig):
         super().__init__()
         self.camera_service = camera_service
+        self.config         = config
         self.available_cameras: list[dict[str, Any]] = []
 
         self.setObjectName("home_page")
@@ -165,6 +176,54 @@ class HomePage(QWidget):
         self.camera_group.vBoxLayout.addWidget(self.status_widget)
         self.camera_group.vBoxLayout.addWidget(self.action_button_widget)
 
+        # ---- Exposure card --------------------------------------------
+        # Sits below the connect button. Editable only when the camera
+        # is connected. Apply pushes the value to the SDK and persists
+        # it via AppConfig so it's restored on the next connect.
+
+        self.exposure_widget = QFrame()
+        self.exposure_widget.setObjectName(_EXPOSURE_PANEL_OBJECT_NAME)
+        self.exposure_widget.setStyleSheet(card_style(_EXPOSURE_PANEL_OBJECT_NAME))
+
+        exp_outer = QVBoxLayout(self.exposure_widget)
+        exp_outer.setContentsMargins(20, 15, 20, 15)
+        exp_outer.setSpacing(10)
+
+        exp_title = QHBoxLayout()
+        exp_title.setSpacing(8)
+        exp_title.addWidget(IconWidget(FluentIcon.SETTING, self.exposure_widget))
+        exp_title.addWidget(StrongBodyLabel("Exposure", self.exposure_widget))
+        exp_title.addStretch(1)
+        exp_outer.addLayout(exp_title)
+
+        exp_row = QHBoxLayout()
+        exp_row.setSpacing(10)
+
+        self.exposure_spinbox = QDoubleSpinBox()
+        self.exposure_spinbox.setDecimals(3)
+        self.exposure_spinbox.setSuffix(" ms")
+        self.exposure_spinbox.setRange(_EXPOSURE_DEFAULT_MIN, _EXPOSURE_DEFAULT_MAX)
+        self.exposure_spinbox.setSingleStep(_EXPOSURE_DEFAULT_STEP)
+        self.exposure_spinbox.setMinimumWidth(140)
+
+        self.exposure_apply_button = PushButton(FluentIcon.ACCEPT, "Apply")
+
+        exp_row.addWidget(StrongBodyLabel("Exposure time:"))
+        exp_row.addWidget(self.exposure_spinbox)
+        exp_row.addStretch(1)
+        exp_row.addWidget(self.exposure_apply_button)
+        exp_outer.addLayout(exp_row)
+
+        self.exposure_range_label = BodyLabel("Range: connect a camera first.")
+        exp_outer.addWidget(self.exposure_range_label)
+
+        # Disabled until the camera reports it's connected.
+        self.exposure_spinbox.setEnabled(False)
+        self.exposure_apply_button.setEnabled(False)
+
+        self.camera_group.vBoxLayout.addSpacing(10)
+        self.camera_group.vBoxLayout.addWidget(self.exposure_widget)
+
         left_layout.addWidget(self.text_widget)
         left_layout.addWidget(self.camera_group)
         left_layout.addStretch(1)
@@ -218,6 +277,7 @@ class HomePage(QWidget):
     def _connect_signals(self):
         self.refresh_button.clicked.connect(self.refresh_camera_list)
         self.connect_button.clicked.connect(self.toggle_camera_connection)
+        self.exposure_apply_button.clicked.connect(self._on_exposure_apply_clicked)
 
     # ------------------------------------------------------------------
     # Camera handling
@@ -229,6 +289,7 @@ class HomePage(QWidget):
             first_cam_id = self.available_cameras[0]["id"]
 
             if self.camera_service.connect(first_cam_id):
+                self._after_camera_connected()
                 InfoBar.success(
                     title="Camera Auto-Connected",
                     content=f"Connected to {self.camera_service.get_status()['model']}.",
@@ -268,6 +329,7 @@ class HomePage(QWidget):
     def toggle_camera_connection(self):
         if self.camera_service.get_status()["connected"]:
             self.camera_service.disconnect()
+            self._after_camera_disconnected()
             InfoBar.success(
                 title="Camera Disconnected",
                 content="The camera has been disconnected.",
@@ -295,6 +357,7 @@ class HomePage(QWidget):
             selected_cam_id = self.available_cameras[selected_index]["id"]
 
             if self.camera_service.connect(selected_cam_id):
+                self._after_camera_connected()
                 InfoBar.success(
                     title="Camera Connected",
                     content=f"Connected to {self.camera_service.get_status()['model']}.",
@@ -308,6 +371,86 @@ class HomePage(QWidget):
                 )
 
         self.update_status_display()
+
+    # ------------------------------------------------------------------
+    # Exposure handling
+    # ------------------------------------------------------------------
+
+    def _after_camera_connected(self) -> None:
+        """
+        Configure the exposure card from the live camera and re-apply
+        the persisted exposure (if any).
+        """
+        rng = self.camera_service.get_exposure_range_ms()
+        if rng is not None:
+            lo, hi, inc = rng
+            self.exposure_spinbox.setRange(lo, hi)
+            # Smaller of the SDK increment and a user-friendly step.
+            step = inc if inc > 0 else _EXPOSURE_DEFAULT_STEP
+            self.exposure_spinbox.setSingleStep(step)
+            self.exposure_range_label.setText(
+                f"Range: {lo:.3f} – {hi:.3f} ms (step {inc:.4f} ms)"
+            )
+        else:
+            self.exposure_range_label.setText(
+                "Could not read exposure range from camera."
+            )
+
+        # Apply the persisted exposure first (if any), then reflect the
+        # actual hardware value in the spinbox. If nothing is persisted,
+        # just show whatever the camera defaulted to.
+        saved = self.config.camera_exposure_ms
+        if saved is not None:
+            applied = self.camera_service.set_exposure_ms(saved)
+            if applied is not None:
+                logger.info(
+                    "Restored persisted exposure: %.3f ms (applied %.3f ms).",
+                    saved, applied,
+                )
+
+        current = self.camera_service.get_exposure_ms()
+        if current is not None:
+            # blockSignals isn't needed (we don't react to valueChanged)
+            # but setValue can clamp; that's harmless here.
+            self.exposure_spinbox.setValue(current)
+
+        self.exposure_spinbox.setEnabled(True)
+        self.exposure_apply_button.setEnabled(True)
+
+    def _after_camera_disconnected(self) -> None:
+        self.exposure_spinbox.setEnabled(False)
+        self.exposure_apply_button.setEnabled(False)
+        self.exposure_range_label.setText("Range: connect a camera first.")
+
+    def _on_exposure_apply_clicked(self) -> None:
+        if not self.camera_service.get_status()["connected"]:
+            InfoBar.error(
+                title="Camera not connected",
+                content="Connect a camera before changing exposure.",
+                duration=3000, parent=self, position=InfoBarPosition.TOP,
+            )
+            return
+
+        requested = float(self.exposure_spinbox.value())
+        applied   = self.camera_service.set_exposure_ms(requested)
+        if applied is None:
+            InfoBar.error(
+                title="Exposure not applied",
+                content="The camera rejected the requested value. "
+                        "See the log for details.",
+                duration=4000, parent=self, position=InfoBarPosition.TOP,
+            )
+            return
+
+        # Reflect any rounding the hardware applied.
+        self.exposure_spinbox.setValue(applied)
+        self.config.set_camera_exposure_ms(applied)
+
+        InfoBar.success(
+            title="Exposure updated",
+            content=f"Applied {applied:.3f} ms (saved).",
+            duration=2500, parent=self, position=InfoBarPosition.TOP,
+        )
 
     def update_status_display(self):
         status = self.camera_service.get_status()

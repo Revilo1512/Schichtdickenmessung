@@ -145,6 +145,13 @@ class CameraService:
             self.disconnect(); return False
 
         self.is_connected = True
+
+        # Auto-shutter must be off: reference and sample frames need a
+        # constant exposure for the I/I0 ratio to be meaningful. If the
+        # call fails we still continue, but log loudly because the
+        # measurements may then be inconsistent.
+        self._disable_auto_exposure()
+
         logger.info("Camera %s (%s) ready (%sx%s px).",
                     camera_id, self.model_name,
                     self.width.value, self.height.value)
@@ -177,6 +184,116 @@ class CameraService:
 
     def __del__(self):
         self.disconnect()
+
+    # ------------------------------------------------------------------
+    # Exposure control
+    # ------------------------------------------------------------------
+    #
+    # Wraps the IDS uEye is_Exposure() call. All values are in
+    # milliseconds (the unit the SDK uses internally). The hardware
+    # quantises the requested value to the increment reported by
+    # get_exposure_range_ms(); set_exposure_ms() returns the actual
+    # value that was applied.
+    #
+    # Auto-shutter is disabled in connect(). Do not re-enable it: a
+    # constant exposure between reference and sample is required for
+    # Beer-Lambert to produce a meaningful transmission ratio.
+
+    def _disable_auto_exposure(self) -> None:
+        enable = ueye.double(0.0)   # 0 = disabled
+        rval   = ueye.double(0.0)   # not used for SET, but required arg
+        ret = ueye.is_SetAutoParameter(
+            self.h_cam, ueye.IS_SET_ENABLE_AUTO_SHUTTER, enable, rval,
+        )
+        if ret != ueye.IS_SUCCESS:
+            logger.warning(
+                "Could not disable auto-exposure (code %s); "
+                "transmission measurements may be inconsistent.", ret,
+            )
+            return
+        logger.info("Auto-exposure disabled.")
+
+    def get_exposure_ms(self) -> float | None:
+        """Current exposure time in milliseconds, or None on error."""
+        if not self.is_connected:
+            return None
+        exp = ueye.double()
+        ret = ueye.is_Exposure(
+            self.h_cam, ueye.IS_EXPOSURE_CMD_GET_EXPOSURE,
+            exp, ueye.sizeof(exp),
+        )
+        if ret != ueye.IS_SUCCESS:
+            logger.error("Could not read exposure (code %s).", ret)
+            return None
+        return float(exp.value)
+
+    def get_exposure_range_ms(self) -> tuple[float, float, float] | None:
+        """Supported exposure range as (min, max, increment) in ms."""
+        if not self.is_connected:
+            return None
+        cmds = (
+            ueye.IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MIN,
+            ueye.IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_MAX,
+            ueye.IS_EXPOSURE_CMD_GET_EXPOSURE_RANGE_INC,
+        )
+        out: list[float] = []
+        for cmd in cmds:
+            v = ueye.double()
+            ret = ueye.is_Exposure(self.h_cam, cmd, v, ueye.sizeof(v))
+            if ret != ueye.IS_SUCCESS:
+                logger.error(
+                    "Could not read exposure range (cmd=%s, code=%s).",
+                    cmd, ret,
+                )
+                return None
+            out.append(float(v.value))
+        return out[0], out[1], out[2]
+
+    def set_exposure_ms(self, value_ms: float) -> float | None:
+        """
+        Set exposure time in milliseconds.
+
+        The hardware rounds to the nearest valid step (the ``increment``
+        from ``get_exposure_range_ms``). Returns the actual value that
+        was applied, or None on failure. Out-of-range values are clamped
+        to [min, max] with a warning rather than rejected.
+        """
+        if not self.is_connected:
+            logger.error("set_exposure_ms: camera not connected.")
+            return None
+
+        rng = self.get_exposure_range_ms()
+        if rng is not None:
+            lo, hi, _inc = rng
+            if value_ms < lo or value_ms > hi:
+                clamped = max(lo, min(hi, value_ms))
+                logger.warning(
+                    "set_exposure_ms: %.4f ms outside [%.4f, %.4f]; "
+                    "clamping to %.4f ms.",
+                    value_ms, lo, hi, clamped,
+                )
+                value_ms = clamped
+
+        target = ueye.double(value_ms)
+        ret = ueye.is_Exposure(
+            self.h_cam, ueye.IS_EXPOSURE_CMD_SET_EXPOSURE,
+            target, ueye.sizeof(target),
+        )
+        if ret != ueye.IS_SUCCESS:
+            logger.error(
+                "set_exposure_ms: hardware rejected %.4f ms (code %s).",
+                value_ms, ret,
+            )
+            return None
+
+        actual = self.get_exposure_ms()
+        if actual is None:
+            actual = value_ms
+        logger.info(
+            "Exposure set: requested %.4f ms, applied %.4f ms.",
+            value_ms, actual,
+        )
+        return actual
 
     # ------------------------------------------------------------------
     # Low-level hardware capture
