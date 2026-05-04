@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pyueye import ueye
 from typing import Any
 
+from layer_thickness_app.services.image_stats import compute_image_stats
+
 logger = logging.getLogger(__name__)
 
 _MIN_USABLE_FRACTION      = 0.5
@@ -17,20 +19,27 @@ class FrameCaptureResult:
     """
     Result of a (possibly multi-frame) capture.
 
-    image             : BGR uint8, pixel-wise averaged frame.
-    gray_mean         : outlier-cleaned mean of per-frame gray scalars.
-    gray_std          : sample std of per-frame gray scalars after
-                        outlier rejection (0.0 for single-frame captures).
-    frame_count       : number of frames requested.
-    frames_used       : number of frames kept after outlier rejection.
-    outliers_rejected : number of frames discarded by sigma-clipping.
+    ``gray_mean`` / ``gray_std`` are the per-frame ITU-R 601 luminance
+    statistics used for outlier rejection and Beer-Lambert. The remaining
+    fields describe the *averaged* image and feed the plausibility gate:
+
+    gray_p99           : 99th percentile of luminance (saturation tail).
+    hotspot_mean       : mean over the top 0.5 % brightest pixels —
+                         robust estimator of the laser spot intensity,
+                         valid whether the spot fills the frame (thin
+                         layer) or shrinks to a point (thick layer).
+    saturated_fraction : fraction of pixels at or above 254 — detects
+                         clipping even when most of the frame is dark.
     """
-    image:             np.ndarray
-    gray_mean:         float
-    gray_std:          float
-    frame_count:       int
-    frames_used:       int
-    outliers_rejected: int
+    image:              np.ndarray
+    gray_mean:          float
+    gray_std:           float
+    gray_p99:           float
+    hotspot_mean:       float
+    saturated_fraction: float
+    frame_count:        int
+    frames_used:        int
+    outliers_rejected:  int
 
     @property
     def mode(self) -> str:
@@ -216,13 +225,17 @@ class CameraService:
             if raw is None:
                 return None
             gray = _bgr_frame_to_gray_scalar(raw)
+            stats = compute_image_stats(raw)
             return FrameCaptureResult(
-                image             = raw,
-                gray_mean         = gray,
-                gray_std          = 0.0,
-                frame_count       = 1,
-                frames_used       = 1,
-                outliers_rejected = 0,
+                image              = raw,
+                gray_mean          = gray,
+                gray_std           = 0.0,
+                gray_p99           = stats.gray_p99,
+                hotspot_mean       = stats.hotspot_mean,
+                saturated_fraction = stats.saturated_fraction,
+                frame_count        = 1,
+                frames_used        = 1,
+                outliers_rejected  = 0,
             )
 
         logger.info("Multi-frame capture: requesting %d frames (sigma=%.1f).",
@@ -302,17 +315,26 @@ class CameraService:
         gray_mean = float(clean_arr.mean())
         gray_std  = float(clean_arr.std(ddof=1)) if n_kept > 1 else 0.0
 
+        # Spatial stats on the averaged image — this is what plausibility
+        # and any downstream user inspection actually see.
+        stats = compute_image_stats(avg_frame)
+
         logger.info(
             "Multi-frame result: frames_used=%d, outliers=%d, "
-            "gray_mean=%.3f, gray_std=%.3f",
+            "gray_mean=%.3f, gray_std=%.3f, hotspot_mean=%.3f, "
+            "p99=%.3f, sat_frac=%.4f",
             n_kept, n_outliers, gray_mean, gray_std,
+            stats.hotspot_mean, stats.gray_p99, stats.saturated_fraction,
         )
 
         return FrameCaptureResult(
-            image             = avg_frame,
-            gray_mean         = gray_mean,
-            gray_std          = gray_std,
-            frame_count       = n_frames,
-            frames_used       = n_kept,
-            outliers_rejected = n_outliers,
+            image              = avg_frame,
+            gray_mean          = gray_mean,
+            gray_std           = gray_std,
+            gray_p99           = stats.gray_p99,
+            hotspot_mean       = stats.hotspot_mean,
+            saturated_fraction = stats.saturated_fraction,
+            frame_count        = n_frames,
+            frames_used        = n_kept,
+            outliers_rejected  = n_outliers,
         )

@@ -8,12 +8,15 @@ expected-range and wavelength defaults for the selected material.
 
 Operator notes
 --------------
-* ``saturation_warn`` — run the laser with no probe in beam, capture 10
-  references, note the maximum gray mean observed and set this value to
-  that maximum minus ~10 counts. Don't exceed 250 (the hardware
-  saturation error fires at 254).
-* ``signal_warn`` / ``signal_err`` — typically leave at the service
-  defaults (20 / 10) unless you have a reason to tighten them.
+* ``saturation_frac_warn`` — capture 10 references with no probe in the
+  beam, note the maximum ``saturated_fraction`` observed, and set the
+  warn threshold to a value just above that. Don't exceed the err
+  threshold; clipped pixels in the spot invalidate the measurement.
+* ``hotspot_warn`` / ``hotspot_err`` — minimum acceptable spot intensity
+  (mean over the top 0.5 % of pixels). For the thickest layer in your
+  campaign, the spot should still sit comfortably above the warn
+  threshold; if it drops below ``hotspot_err`` the Beer-Lambert output
+  is dominated by sensor noise.
 * ``expected_range_nm`` — the (min, max) thickness range you expect for
   this material. Used to pre-populate the reference-thickness input and
   to hint at the Beer-Lambert measurable range in messages.
@@ -37,22 +40,18 @@ class MaterialProfile:
     label:                     str
     supported_wavelengths_um:  tuple[float, ...]
     expected_range_nm:         tuple[float, float]
-    saturation_warn:           float
-    signal_warn:               float
-    signal_err:                float
+    saturation_frac_warn:      float
+    saturation_frac_err:       float
+    hotspot_warn:              float
+    hotspot_err:               float
     notes:                     str = ""
 
 
 # ---------------------------------------------------------------------------
-# Populated profiles. The saturation_warn / expected_range_nm values
-# below are reasonable starting points — re-measure them on your own
-# hardware and commit the tuned values back here.
+# Populated profiles. Re-measure these on your own hardware and commit
+# the tuned values back here before running a campaign.
 # ---------------------------------------------------------------------------
 PROFILES: dict[tuple[str, str, str], MaterialProfile] = {
-    # Copper. Johnson & Christy is the standard reference for thin-film
-    # plasmonic work and the most frequently cited Cu dataset in the
-    # literature. Confirm the page key against your refractiveindex.info
-    # selection before running a campaign.
     ("main", "Cu", "Johnson"): MaterialProfile(
         shelf                    = "main",
         book                     = "Cu",
@@ -60,14 +59,13 @@ PROFILES: dict[tuple[str, str, str], MaterialProfile] = {
         label                    = "Cu (Johnson & Christy)",
         supported_wavelengths_um = (0.635, 0.532),
         expected_range_nm        = (20.0, 120.0),
-        saturation_warn          = 240.0,
-        signal_warn              = 20.0,
-        signal_err               = 10.0,
-        notes                    = "Calibrate saturation_warn against your beam intensity.",
+        saturation_frac_warn     = 0.0010,
+        saturation_frac_err      = 0.0050,
+        hotspot_warn             = 50.0,
+        hotspot_err              = 25.0,
+        notes                    = "Tune saturation_frac_warn against your beam intensity.",
     ),
 
-    # Titanium. Rakić Lorentz-Drude is a broadly-used reference. Adjust
-    # the page key if you pick a different catalog entry.
     ("main", "Ti", "Rakic-LD"): MaterialProfile(
         shelf                    = "main",
         book                     = "Ti",
@@ -75,9 +73,10 @@ PROFILES: dict[tuple[str, str, str], MaterialProfile] = {
         label                    = "Ti (Rakić Lorentz-Drude)",
         supported_wavelengths_um = (0.635, 0.532),
         expected_range_nm        = (15.0, 100.0),
-        saturation_warn          = 240.0,
-        signal_warn              = 20.0,
-        signal_err               = 10.0,
+        saturation_frac_warn     = 0.0010,
+        saturation_frac_err      = 0.0050,
+        hotspot_warn             = 50.0,
+        hotspot_err              = 25.0,
         notes                    = "Ti absorbs more strongly than Cu at 635 nm.",
     ),
 }

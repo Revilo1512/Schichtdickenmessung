@@ -38,12 +38,21 @@ class AppConfig(QObject):
     FRAME_COUNT_DEFAULT: int = 30
     DB_PATH:             str = "data/measurements.db"
 
-    # Fallback plausibility thresholds. MaterialProfile values, when
-    # available, override the warning bands.
-    PLAUSIBILITY_SAT_ERR:  float = 254.0
-    PLAUSIBILITY_SAT_WARN: float = 240.0
-    PLAUSIBILITY_SIG_ERR:  float = 10.0
-    PLAUSIBILITY_SIG_WARN: float = 20.0
+    # Plausibility thresholds. The transmission setup produces a small
+    # bright spot in an otherwise dark frame, so saturation and signal
+    # strength are derived from the spot, not the global gray mean.
+    #
+    # Saturation is detected by the fraction of pixels at or above 254;
+    # a tiny clipped patch in the centre is enough to invalidate the
+    # measurement, so the error threshold is conservative.
+    PLAUSIBILITY_SAT_FRAC_ERR:  float = 0.0050
+    PLAUSIBILITY_SAT_FRAC_WARN: float = 0.0010
+
+    # Signal strength is the mean over the top 0.5 % of pixels (the
+    # laser spot). For thick layers most of the frame is dark, but the
+    # spot itself must remain well above the sensor noise floor.
+    PLAUSIBILITY_HOTSPOT_ERR:  float = 25.0
+    PLAUSIBILITY_HOTSPOT_WARN: float = 50.0
 
     def __init__(self):
         super().__init__()

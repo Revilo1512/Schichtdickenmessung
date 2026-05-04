@@ -41,7 +41,7 @@ from layer_thickness_app.services.calibration_service import (
     CalibrationService, CalibrationModel,
 )
 from layer_thickness_app.gui.theme import (
-    card_style, borderless_style, quality_color,
+    card_style, borderless_style, quality_color, FlowLayout,
     COLOR_SUCCESS, COLOR_ERROR,
 )
 
@@ -100,15 +100,12 @@ class CalibrationPage(QWidget):
 
         root.addWidget(SubtitleLabel("Calibration — Fit Regression Model"))
 
-        # Filter bar
-        filter_bar = QHBoxLayout()
-        filter_bar.setSpacing(10)
-
+        # Filter bar (FlowLayout wraps to a second row at narrow widths)
         self.book_combo   = ComboBox(self); self.book_combo.setPlaceholderText("Material (Book)")
         self.page_combo   = ComboBox(self); self.page_combo.setPlaceholderText("Dataset (Page)")
         self.wave_combo   = ComboBox(self)
-        self.wave_combo.addItem("Red (635 nm)",   0.635)
-        self.wave_combo.addItem("Green (532 nm)", 0.532)
+        self.wave_combo.addItem("Red (635 nm)", None,   0.635)
+        self.wave_combo.addItem("Green (532 nm)", None, 0.532)
         self.mode_combo   = ComboBox(self)
         self.mode_combo.addItems(["multi", "single"])
         self.session_combo = ComboBox(self); self.session_combo.setPlaceholderText("Any session")
@@ -116,6 +113,8 @@ class CalibrationPage(QWidget):
         self.load_button = PushButton("Load Candidates", self)
         self.load_button.setIcon(FluentIcon.SYNC)
 
+        filter_host = QWidget(self)
+        flow = FlowLayout(filter_host, margin=0, h_spacing=10, v_spacing=8)
         for label, widget in (
             ("Book:",       self.book_combo),
             ("Page:",       self.page_combo),
@@ -123,13 +122,10 @@ class CalibrationPage(QWidget):
             ("Mode:",       self.mode_combo),
             ("Session:",    self.session_combo),
         ):
-            filter_bar.addWidget(BodyLabel(label))
-            filter_bar.addWidget(widget)
-            filter_bar.addSpacing(6)
-        filter_bar.addStretch(1)
-        filter_bar.addWidget(self.load_button)
+            flow.addWidget(self._make_field(label, widget))
+        flow.addWidget(self.load_button)
 
-        root.addLayout(filter_bar)
+        root.addWidget(filter_host)
 
         # Quick-action bar
         action_bar = QHBoxLayout()
@@ -201,6 +197,20 @@ class CalibrationPage(QWidget):
         save_bar.addWidget(self.fit_button)
         save_bar.addWidget(self.save_button)
         root.addLayout(save_bar)
+
+    @staticmethod
+    def _make_field(label_text: str, widget: QWidget) -> QWidget:
+        """
+        Bundle a small caption + control into one widget so a flow layout
+        can keep them together when wrapping to a new row.
+        """
+        host = QWidget()
+        h = QHBoxLayout(host)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        h.addWidget(BodyLabel(label_text))
+        h.addWidget(widget)
+        return host
 
     def _build_fit_panel(self) -> QFrame:
         frame = QFrame(self)

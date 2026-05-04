@@ -16,7 +16,7 @@ from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QFont
 
 try:
-    from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+    from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
     from PyQt6.QtMultimediaWidgets import QVideoWidget
     MULTIMEDIA_AVAILABLE = True
 except ImportError:
@@ -119,9 +119,17 @@ class HelpPage(QWidget):
         self.audio_output = QAudioOutput()
 
         self.audio_output.setVolume(0.5)
+        self._apply_default_audio_device()
         self.media_player.setAudioOutput(self.audio_output)
         self.media_player.setVideoOutput(self.video_widget)
         self.media_player.setSource(QUrl.fromLocalFile(str(VIDEO_PATH)))
+
+        # Re-route audio when the OS default output device changes (e.g. user
+        # plugs in headphones or switches device in Windows sound settings).
+        self._media_devices = QMediaDevices(self)
+        self._media_devices.audioOutputsChanged.connect(
+            self._on_audio_outputs_changed
+        )
 
         self.position_slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.position_slider.setRange(0, 0)
@@ -187,3 +195,24 @@ class HelpPage(QWidget):
 
     def _set_volume(self, volume: int):
         self.audio_output.setVolume(volume / 100.0)
+
+    # ------------------------------------------------------------------
+    # Audio device follow-along
+    # ------------------------------------------------------------------
+
+    def _apply_default_audio_device(self) -> None:
+        """Bind the audio output to whatever the OS currently reports as default."""
+        try:
+            default_device = QMediaDevices.defaultAudioOutput()
+            if default_device is not None and not default_device.isNull():
+                self.audio_output.setDevice(default_device)
+                logger.info(
+                    "Audio output bound to: %s",
+                    default_device.description(),
+                )
+        except Exception as e:
+            logger.debug("Could not bind default audio device: %s", e)
+
+    def _on_audio_outputs_changed(self) -> None:
+        """Re-apply the (possibly new) default device on hot-swap."""
+        self._apply_default_audio_device()

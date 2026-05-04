@@ -1,12 +1,12 @@
 """
 Report export for MSA Type 1 validation studies.
 
-Produces a timestamped ZIP file containing:
-  - summary.txt       : human-readable headline with Cg / Cgk verdicts
-  - msa_raw.csv       : one-row CSV with the raw-measurements MSA report
-  - msa_corrected.csv : one-row CSV with the corrected MSA report (if any)
-  - measurements.csv  : the underlying repeated-measurement series
-  - calibration.csv   : the calibration model metadata (if any)
+``export_msa_study`` writes a timestamped ZIP per (probe, reference)
+containing summary, MSA reports, raw measurements and the active
+calibration model. ``export_linearity_study`` aggregates several MSA
+reports across reference thicknesses (e.g. 30/40/50/60 nm) into a
+single linearity ZIP with regression slope, intercept, R² and the
+Linearität figure-of-merit.
 
 All files are plain UTF-8 CSV for easy import into Excel, Minitab or
 any downstream statistics tool.
@@ -21,19 +21,22 @@ import shutil
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from layer_thickness_app.services.msa_service         import MSAReport
 from layer_thickness_app.services.calibration_service import CalibrationModel
+from layer_thickness_app.services.linearity_service   import (
+    LinearityReport, LinearityService,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ReportService:
-    """Serialises MSA validation studies to disk."""
+    """Serialises MSA validation studies and linearity studies to disk."""
 
     # ------------------------------------------------------------------
-    # Public API
+    # Public API — MSA study (single reference thickness)
     # ------------------------------------------------------------------
 
     def export_msa_study(
@@ -47,14 +50,6 @@ class ReportService:
         tolerance:           float,
         material_label:      str,
     ) -> str:
-        """
-        Writes a full MSA study to a timestamped ZIP in *export_dir*.
-
-        Returns
-        -------
-        str
-            Absolute path to the generated ZIP file, or "" on failure.
-        """
         export_dir = Path(export_dir)
         if not export_dir.is_dir():
             logger.error("Export directory does not exist: %s", export_dir)
@@ -95,6 +90,66 @@ class ReportService:
                 logger.warning("Could not clean up temp dir %s: %s", tmp, e)
 
     # ------------------------------------------------------------------
+    # Public API — linearity study (across multiple reference thicknesses)
+    # ------------------------------------------------------------------
+
+    def export_linearity_study(
+        self,
+        export_dir:    str | Path,
+        reports:       Iterable[MSAReport],
+        material_label: str,
+    ) -> str:
+        export_dir = Path(export_dir)
+        if not export_dir.is_dir():
+            logger.error("Export directory does not exist: %s", export_dir)
+            return ""
+
+        report_list = list(reports)
+        if not report_list:
+            logger.error("No MSA reports supplied for linearity export.")
+            return ""
+
+        try:
+            lin_report = LinearityService().compute(
+                report_list, material=material_label, label=material_label,
+            )
+        except Exception as e:
+            logger.exception("Linearity computation failed: %s", e)
+            return ""
+
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_material = self._safe_filename_fragment(material_label) or "linearity"
+        zip_base = export_dir / f"linearity_{safe_material}_{stamp}"
+
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            (tmp / "linearity_summary.txt").write_text(
+                lin_report.summary() + "\n", encoding="utf-8",
+            )
+            self._write_linearity_csv(tmp / "linearity.csv", lin_report)
+            for r in report_list:
+                fname = (
+                    f"msa_ref_{int(round(r.reference_thickness)):d}_nm.csv"
+                )
+                self._write_report_csv(tmp / fname, r)
+
+            zip_path = shutil.make_archive(
+                base_name = str(zip_base),
+                format    = "zip",
+                root_dir  = str(tmp),
+            )
+            logger.info("Exported linearity study to %s", zip_path)
+            return zip_path
+        except Exception as e:
+            logger.exception("Linearity export failed: %s", e)
+            return ""
+        finally:
+            try:
+                shutil.rmtree(tmp)
+            except OSError as e:
+                logger.warning("Could not clean up temp dir %s: %s", tmp, e)
+
+    # ------------------------------------------------------------------
     # File writers
     # ------------------------------------------------------------------
 
@@ -108,7 +163,6 @@ class ReportService:
         tolerance:           float,
         material_label:      str,
     ) -> None:
-        """Human-readable headline summary of the MSA study."""
         lines: list[str] = []
         lines.append("=" * 72)
         lines.append("MSA Type 1 Validation Report")
@@ -159,7 +213,6 @@ class ReportService:
 
     @staticmethod
     def _write_report_csv(path: Path, report: MSAReport) -> None:
-        """One-row CSV of an MSAReport."""
         row = asdict(report)
         with path.open("w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=list(row.keys()))
@@ -170,18 +223,18 @@ class ReportService:
     def _write_measurements_csv(
         path: Path, measurements: list[dict[str, Any]],
     ) -> None:
-        """Raw measurement series — exactly what was fed into MSA."""
         if not measurements:
             path.write_text("", encoding="utf-8")
             return
 
-        # Stable column order: useful fields first, then everything else.
         preferred = [
             "id", "Date", "Layer", "ThicknessCorrected",
             "ReferenceThickness", "Mode",
             "FrameCountRef", "FrameCountSample",
             "MeanGrayRef", "MeanGraySample",
             "StdGrayRef", "StdGraySample",
+            "HotspotRef", "HotspotSample",
+            "SaturatedFractionRef", "SaturatedFractionSample",
             "SessionTag", "Probe", "RunIndex",
         ]
         all_keys: list[str] = []
@@ -207,13 +260,37 @@ class ReportService:
             writer.writeheader()
             writer.writerow(row)
 
+    @staticmethod
+    def _write_linearity_csv(path: Path, report: LinearityReport) -> None:
+        with path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "material", "label",
+                "slope", "intercept", "r_squared",
+                "sigma_pooled", "linearity_index",
+                "bias_avg", "bias_max", "n_total",
+            ])
+            writer.writerow([
+                report.material, report.label,
+                report.slope, report.intercept, report.r_squared,
+                report.sigma_pooled, report.linearity_index,
+                report.bias_avg, report.bias_max, report.n_total,
+            ])
+            writer.writerow([])
+            writer.writerow([
+                "reference_thickness", "n", "mean", "std", "bias_signed",
+            ])
+            for p in report.points:
+                writer.writerow([
+                    p.reference_thickness, p.n, p.mean, p.std, p.bias_signed,
+                ])
+
     # ------------------------------------------------------------------
     # Utils
     # ------------------------------------------------------------------
 
     @staticmethod
     def _safe_filename_fragment(text: str) -> str:
-        """Turn an arbitrary label into a filesystem-safe filename chunk."""
         keep = []
         for ch in text:
             if ch.isalnum() or ch in "-_":
@@ -224,9 +301,7 @@ class ReportService:
 
 
 # ---------------------------------------------------------------------------
-# Module-level helper kept here (instead of as a static method) so the UI
-# layer can import it without dragging the writer code along.
-# ---------------------------------------------------------------------------
+
 def _verdict_text(raw: MSAReport, corrected: MSAReport) -> str:
     if corrected.is_capable and not raw.is_capable:
         headline = "Calibration made the system CAPABLE."

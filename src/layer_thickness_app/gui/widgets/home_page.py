@@ -22,7 +22,7 @@ from qfluentwidgets import (
 
 from layer_thickness_app.services.camera_service import CameraService
 from layer_thickness_app.gui.theme import (
-    card_style, status_label_style, BORDER_FAINT,
+    card_style, status_label_style,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,8 @@ BASE_DIR   = Path(__file__).resolve().parent.parent
 IMAGE_PATH = BASE_DIR / "resources" / "measurement_device.jpg"
 
 _STATUS_PANEL_OBJECT_NAME = "status_card_content"
+_WELCOME_CARD_OBJECT_NAME = "home_welcome_card"
+_IMAGE_CARD_OBJECT_NAME   = "home_image_card"
 
 
 class HomePage(QWidget):
@@ -70,12 +72,14 @@ class HomePage(QWidget):
         self.left_column_widget = QWidget(self)
         left_layout = QVBoxLayout(self.left_column_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(40)
+        left_layout.setSpacing(20)
 
-        # Welcome text
-        self.text_widget = QWidget()
+        # Welcome text -- wrapped in a card to match the rest of the page.
+        self.text_widget = QFrame()
+        self.text_widget.setObjectName(_WELCOME_CARD_OBJECT_NAME)
+        self.text_widget.setStyleSheet(card_style(_WELCOME_CARD_OBJECT_NAME))
         text_layout = QVBoxLayout(self.text_widget)
-        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setContentsMargins(20, 18, 20, 18)
         text_layout.setSpacing(5)
 
         self.title_label    = TitleLabel("Layer Thickness Tool")
@@ -170,7 +174,16 @@ class HomePage(QWidget):
         right_layout = QVBoxLayout(self.right_column_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.image_label = QLabel(self)
+        # Wrap the device image in a card frame so its border matches the
+        # other "boxes" on the page (welcome card, status card).
+        self.image_card = QFrame(self)
+        self.image_card.setObjectName(_IMAGE_CARD_OBJECT_NAME)
+        self.image_card.setStyleSheet(card_style(_IMAGE_CARD_OBJECT_NAME))
+        card_layout = QVBoxLayout(self.image_card)
+        card_layout.setContentsMargins(12, 12, 12, 12)
+        card_layout.setSpacing(0)
+
+        self.image_label = QLabel()
         if IMAGE_PATH.exists():
             pixmap = QPixmap(str(IMAGE_PATH))
             scaled = pixmap.scaled(
@@ -181,16 +194,19 @@ class HomePage(QWidget):
             self.image_label.setPixmap(scaled)
             self.image_label.setFixedSize(scaled.size())
             self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.image_label.setStyleSheet(
-                f"border-radius: 12px; border: 1px solid {BORDER_FAINT};"
-            )
+            self.image_label.setStyleSheet("border: none; background: transparent;")
         else:
             logger.warning("Measurement device image not found at %s", IMAGE_PATH)
             self.image_label.setText("Image not found")
             self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        right_layout.addWidget(
+        card_layout.addWidget(
             self.image_label,
+            alignment=Qt.AlignmentFlag.AlignCenter,
+        )
+
+        right_layout.addWidget(
+            self.image_card,
             alignment=Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
         )
         right_layout.addStretch(1)

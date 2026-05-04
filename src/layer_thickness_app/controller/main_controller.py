@@ -96,6 +96,22 @@ class MainController:
     def show_window(self):
         self.view.show()
 
+    def shutdown(self) -> None:
+        """
+        Graceful teardown invoked on QApplication.aboutToQuit. Releases
+        the camera and closes the SQLite connection so the WAL/SHM
+        sidecar files don't linger.
+        """
+        try:
+            if self.camera_service.get_status().get("connected"):
+                self.camera_service.disconnect()
+        except Exception as e:
+            logger.debug("Camera disconnect on shutdown failed: %s", e)
+        try:
+            self.db_service.close()
+        except Exception as e:
+            logger.debug("DB close on shutdown failed: %s", e)
+
     # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
@@ -175,9 +191,9 @@ class MainController:
         else:
             self.measurement_page.set_profile_caption(
                 f"Profile: {profile.label} "
-                f"(sat_warn={profile.saturation_warn:.0f}, "
-                f"sig_warn={profile.signal_warn:.0f}, "
-                f"sig_err={profile.signal_err:.0f})"
+                f"(sat_frac_warn={profile.saturation_frac_warn:.4f}, "
+                f"hotspot_warn={profile.hotspot_warn:.0f}, "
+                f"hotspot_err={profile.hotspot_err:.0f})"
             )
             lo, hi = profile.expected_range_nm
             self.measurement_page.set_reference_thickness_hint(lo, hi)
@@ -222,7 +238,7 @@ class MainController:
         self.measurement_page.set_result_text("Result...")
         self.measurement_page.set_calculation_enabled(True)
         self._surface_plausibility(
-            self.plausibility_service.check_reference(capture.gray_mean)
+            self.plausibility_service.check_reference_capture(capture)
         )
 
     def on_take_material_image(self):
@@ -244,12 +260,9 @@ class MainController:
         self.measurement_page.set_result_text("Result...")
         self.measurement_page.set_calculation_enabled(True)
 
-        ref_gray = None
-        ref_cap  = self.measurement_page.reference_capture
-        if ref_cap is not None:
-            ref_gray = ref_cap.gray_mean
+        ref_cap = self.measurement_page.reference_capture
         self._surface_plausibility(
-            self.plausibility_service.check_sample(capture.gray_mean, ref_gray)
+            self.plausibility_service.check_sample_capture(capture, ref_cap)
         )
 
     # ------------------------------------------------------------------
@@ -451,12 +464,26 @@ class MainController:
                 "Success", f"Measurement saved (ID {row_id}).",
             )
 
-            if db_data.get("ReferenceThickness") is not None or db_data.get("SessionTag"):
-                try:
-                    self.calibration_page.refresh_data()
-                    self.validation_page.refresh_data()
-                except Exception as e:
-                    logger.debug("Refresh after save failed: %s", e)
+            # Always refresh dependent views after a successful save so
+            # filters, suggestions and tables pick up the new row without
+            # the user having to re-navigate.
+            try:
+                self.calibration_page.refresh_data()
+            except Exception as e:
+                logger.debug("Calibration refresh after save failed: %s", e)
+            try:
+                self.validation_page.refresh_data()
+            except Exception as e:
+                logger.debug("Validation refresh after save failed: %s", e)
+            try:
+                self.history_page.refresh_data()
+            except Exception as e:
+                logger.debug("History refresh after save failed: %s", e)
+            try:
+                self.view.csv_interface._load_filter_suggestions()
+                self.view.csv_interface.on_update_count()
+            except Exception as e:
+                logger.debug("CSV refresh after save failed: %s", e)
 
         except Exception as e:
             logger.exception("Failed to save measurement: %s", e)

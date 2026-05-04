@@ -42,6 +42,8 @@ class ImportService:
     _FLOAT_COLUMNS = frozenset({
         "Wavelength", "ReferenceThickness", "ThicknessCorrected",
         "MeanGrayRef", "MeanGraySample", "StdGrayRef", "StdGraySample",
+        "HotspotRef", "HotspotSample",
+        "SaturatedFractionRef", "SaturatedFractionSample",
     })
     _INT_COLUMNS = frozenset({
         "FrameCountRef", "FrameCountSample", "RunIndex",

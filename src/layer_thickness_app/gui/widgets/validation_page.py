@@ -28,7 +28,7 @@ from layer_thickness_app.services.calibration_service import (
 from layer_thickness_app.services.msa_service         import MSAService, MSAReport
 from layer_thickness_app.services.report_service      import ReportService
 from layer_thickness_app.gui.theme import (
-    card_style, borderless_style, status_label_style,
+    card_style, borderless_style, status_label_style, FlowLayout,
     COLOR_SUCCESS, COLOR_WARN, COLOR_ERROR,
 )
 
@@ -77,15 +77,12 @@ class ValidationPage(QWidget):
 
         root.addWidget(SubtitleLabel("Validation -- MSA Type 1 (raw vs. corrected)"))
 
-        # Filter bar
-        filter_bar = QHBoxLayout()
-        filter_bar.setSpacing(10)
-
+        # Filter bar (FlowLayout wraps to a second row at narrow widths)
         self.book_combo      = ComboBox(self); self.book_combo.setPlaceholderText("Book")
         self.page_combo      = ComboBox(self); self.page_combo.setPlaceholderText("Page")
         self.wave_combo      = ComboBox(self)
-        self.wave_combo.addItem("Red (635 nm)",   0.635)
-        self.wave_combo.addItem("Green (532 nm)", 0.532)
+        self.wave_combo.addItem("Red (635 nm)", None,   0.635)
+        self.wave_combo.addItem("Green (532 nm)", None, 0.532)
         self.mode_combo      = ComboBox(self); self.mode_combo.addItems(["multi", "single"])
         self.session_combo   = ComboBox(self); self.session_combo.setPlaceholderText("Any session")
         self.reference_combo = ComboBox(self); self.reference_combo.setPlaceholderText("Reference (nm)")
@@ -93,6 +90,8 @@ class ValidationPage(QWidget):
         self.load_button = PushButton("Load Measurements", self)
         self.load_button.setIcon(FluentIcon.SYNC)
 
+        filter_host = QWidget(self)
+        flow = FlowLayout(filter_host, margin=0, h_spacing=10, v_spacing=8)
         for label, widget in (
             ("Book:",       self.book_combo),
             ("Page:",       self.page_combo),
@@ -101,20 +100,14 @@ class ValidationPage(QWidget):
             ("Session:",    self.session_combo),
             ("Reference:",  self.reference_combo),
         ):
-            filter_bar.addWidget(BodyLabel(label))
-            filter_bar.addWidget(widget)
-            filter_bar.addSpacing(4)
-        filter_bar.addStretch(1)
-        filter_bar.addWidget(self.load_button)
-        root.addLayout(filter_bar)
+            flow.addWidget(self._make_field(label, widget))
+        flow.addWidget(self.load_button)
+        root.addWidget(filter_host)
 
-        # Model + tolerance + run row
-        config_bar = QHBoxLayout()
-        config_bar.setSpacing(10)
-
+        # Model + tolerance + run row (also wraps on narrow windows)
         self.model_combo = ComboBox(self)
         self.model_combo.setPlaceholderText("Calibration model...")
-        self.model_combo.setMinimumWidth(350)
+        self.model_combo.setMinimumWidth(280)
 
         self.tolerance_spin = QDoubleSpinBox(self)
         self.tolerance_spin.setRange(0.1, 10_000.0)
@@ -134,17 +127,14 @@ class ValidationPage(QWidget):
         self.run_button.setEnabled(False)
         self.export_button.setEnabled(False)
 
-        config_bar.addWidget(StrongBodyLabel("Model:"))
-        config_bar.addWidget(self.model_combo, 1)
-        config_bar.addSpacing(15)
-        config_bar.addWidget(StrongBodyLabel("Tolerance (Tol):"))
-        config_bar.addWidget(self.tolerance_spin)
-        config_bar.addSpacing(15)
-        config_bar.addWidget(self.rows_loaded_label)
-        config_bar.addStretch(1)
-        config_bar.addWidget(self.export_button)
-        config_bar.addWidget(self.run_button)
-        root.addLayout(config_bar)
+        config_host = QWidget(self)
+        config_flow = FlowLayout(config_host, margin=0, h_spacing=10, v_spacing=8)
+        config_flow.addWidget(self._make_field("Model:", self.model_combo))
+        config_flow.addWidget(self._make_field("Tolerance (Tol):", self.tolerance_spin))
+        config_flow.addWidget(self.rows_loaded_label)
+        config_flow.addWidget(self.export_button)
+        config_flow.addWidget(self.run_button)
+        root.addWidget(config_host)
 
         # Report panels
         report_row = QHBoxLayout()
@@ -162,6 +152,20 @@ class ValidationPage(QWidget):
         self.verdict_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.verdict_label)
 
+    @staticmethod
+    def _make_field(label_text: str, widget: QWidget) -> QWidget:
+        """
+        Bundle a small caption + control into one widget so a flow layout
+        can keep them together when wrapping.
+        """
+        host = QWidget()
+        h = QHBoxLayout(host)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        h.addWidget(BodyLabel(label_text))
+        h.addWidget(widget)
+        return host
+
     def _build_report_panel(self, title: str) -> QFrame:
         frame = QFrame(self)
         frame.setObjectName(_PANEL_OBJECT_NAME)
@@ -169,21 +173,26 @@ class ValidationPage(QWidget):
         outer = QVBoxLayout(frame)
         outer.setContentsMargins(20, 15, 20, 15)
         outer.setSpacing(10)
+        outer.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         title_lbl = SubtitleLabel(title)
         outer.addWidget(title_lbl)
 
         form = QFormLayout()
         form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
         labels: dict[str, BodyLabel] = {
-            "n":      BodyLabel("—"),
-            "mean":   BodyLabel("—"),
-            "std":    BodyLabel("—"),
-            "bias":   BodyLabel("—"),
-            "cg":     BodyLabel("—"),
-            "cgk":    BodyLabel("—"),
-            "status": BodyLabel("—"),
+            "n":       BodyLabel("—"),
+            "mean":    BodyLabel("—"),
+            "std":     BodyLabel("—"),
+            "bias":    BodyLabel("—"),
+            "cg":      BodyLabel("—"),
+            "cgk":     BodyLabel("—"),
+            "pct_var": BodyLabel("—"),
+            "ttest":   BodyLabel("—"),
+            "status":  BodyLabel("—"),
         }
 
         form.addRow(StrongBodyLabel("n:"),         labels["n"])
@@ -192,9 +201,14 @@ class ValidationPage(QWidget):
         form.addRow(StrongBodyLabel("Bias:"),      labels["bias"])
         form.addRow(StrongBodyLabel("Cg:"),        labels["cg"])
         form.addRow(StrongBodyLabel("Cgk:"),       labels["cgk"])
+        form.addRow(StrongBodyLabel("%Var (rep / rep+bias):"), labels["pct_var"])
+        form.addRow(StrongBodyLabel("Bias t-test (t / p):"),   labels["ttest"])
         form.addRow(StrongBodyLabel("Capable?:"),  labels["status"])
 
         outer.addLayout(form)
+        # Push everything to the top so the panel doesn't visually float
+        # in the middle when the window is taller than the content.
+        outer.addStretch(1)
         frame.labels = labels
         return frame
 
@@ -464,6 +478,13 @@ class ValidationPage(QWidget):
         labels["bias"].setText(f"{report.bias:.4f} nm")
         labels["cg"].setText(f"{report.cg:.3f}")
         labels["cgk"].setText(f"{report.cgk:.3f}")
+        labels["pct_var"].setText(
+            f"{report.pct_var_repeat:.2f} %  /  "
+            f"{report.pct_var_repeat_and_bias:.2f} %"
+        )
+        labels["ttest"].setText(
+            f"t = {report.t_stat:.3f}   p = {report.p_value:.4f}"
+        )
 
         labels["cg"].setStyleSheet(self._strong_color_style(
             COLOR_SUCCESS if report.cg_capable else COLOR_ERROR

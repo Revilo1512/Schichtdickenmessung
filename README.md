@@ -13,7 +13,6 @@ workflows for traceable, capability-verified results.
 - **Single-frame** mode for fast measurements and **multi-frame**
   averaging mode (configurable, default 30 frames) with per-frame
   outlier rejection (σ-clipping) for noise reduction.
-- Live grayscale readout while capturing.
 - Live plausibility checks: saturation warnings, low-signal warnings,
   ref-vs-sample sanity (sample must be darker), per-material expected
   thickness ranges.
@@ -72,7 +71,6 @@ workflows for traceable, capability-verified results.
 | Camera | `pyueye` + IDS Software Suite |
 | Material data | `refractiveindex2`, PyYAML |
 | Persistence | SQLite (stdlib `sqlite3`) |
-| Onboarding video | `pytubefix` |
 | Package manager | [`uv`](https://github.com/astral-sh/uv) (recommended) |
 
 ## Prerequisites
@@ -192,16 +190,18 @@ Schichtdickenmessung/
 │       │       └── settings_page.py
 │       └── services/
 │           ├── camera_service.py         # frame capture + outlier rejection
+│           ├── image_stats.py            # hotspot / saturated-fraction stats
 │           ├── calculation_service.py    # Beer–Lambert + sRGB linearisation
 │           ├── plausibility_service.py   # saturation / signal / range checks
 │           ├── calibration_service.py    # linear-regression correction model
-│           ├── msa_service.py            # Cg / Cgk capability indices
+│           ├── msa_service.py            # Cg / Cgk / %Var / t-test
+│           ├── linearity_service.py      # campaign-level linearity report
 │           ├── database_service.py       # SQLite schema + CRUD
 │           ├── material_service.py       # refractiveindex.info catalog loader
 │           ├── material_profiles.py      # per-material thresholds (Cu, Ti)
 │           ├── import_service.py         # ZIP → DB
 │           ├── export_service.py         # DB → ZIP
-│           └── report_service.py         # MSA study export (CSV + summary)
+│           └── report_service.py         # MSA + linearity export
 ├── pyproject.toml
 ├── requirements.txt
 └── README.md
@@ -247,10 +247,10 @@ attributes:
 | Constant | Default | Purpose |
 |---|---|---|
 | `FRAME_COUNT_DEFAULT` | 30 | Default frames per multi-frame capture |
-| `PLAUSIBILITY_SAT_ERR` | 254.0 | Above this gray mean: saturation error |
-| `PLAUSIBILITY_SAT_WARN` | 240.0 | Above this: saturation warning |
-| `PLAUSIBILITY_SIG_ERR` | 10.0 | Below this: signal-too-low error |
-| `PLAUSIBILITY_SIG_WARN` | 20.0 | Below this: signal-low warning |
+| `PLAUSIBILITY_SAT_FRAC_ERR` | 0.0050 | Saturated-pixel fraction error threshold |
+| `PLAUSIBILITY_SAT_FRAC_WARN` | 0.0010 | Saturated-pixel fraction warning threshold |
+| `PLAUSIBILITY_HOTSPOT_ERR` | 25.0 | Minimum hotspot intensity (top-1% pixels) |
+| `PLAUSIBILITY_HOTSPOT_WARN` | 50.0 | Hotspot warning threshold |
 | `WAVELENGTHS` | 635 nm, 532 nm | Selectable wavelengths |
 | `DB_PATH` | `data/measurements.db` | SQLite file location |
 
