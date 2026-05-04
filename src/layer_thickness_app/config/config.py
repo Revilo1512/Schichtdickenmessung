@@ -44,21 +44,17 @@ class AppConfig(QObject):
     FRAME_COUNT_DEFAULT: int = 30
     DB_PATH:             str = "data/measurements.db"
 
-    # Plausibility thresholds. The transmission setup produces a small
-    # bright spot in an otherwise dark frame, so saturation and signal
-    # strength are derived from the spot, not the global gray mean.
+    # Plausibility thresholds.  All checks use the full-image gray mean
+    # (ITU-R 601 luminance averaged over every pixel).
     #
-    # Saturation is detected by the fraction of pixels at or above 254;
-    # a tiny clipped patch in the centre is enough to invalidate the
-    # measurement, so the error threshold is conservative.
-    PLAUSIBILITY_SAT_FRAC_ERR:  float = 0.0050
-    PLAUSIBILITY_SAT_FRAC_WARN: float = 0.0010
+    # Saturated-pixel fraction: the share of pixels at or above 254.
+    # Even a small clipped region invalidates the measurement.
+    PLAUSIBILITY_SAT_FRAC_ERR: float = 0.0050
 
-    # Signal strength is the mean over the top 0.5 % of pixels (the
-    # laser spot). For thick layers most of the frame is dark, but the
-    # spot itself must remain well above the sensor noise floor.
-    PLAUSIBILITY_HOTSPOT_ERR:  float = 25.0
-    PLAUSIBILITY_HOTSPOT_WARN: float = 50.0
+    # Minimum full-image gray mean.  Below this threshold the signal is
+    # indistinguishable from sensor noise and no meaningful thickness
+    # can be calculated.
+    PLAUSIBILITY_GRAY_MEAN_MIN: float = 0.5
 
     def __init__(self):
         super().__init__()

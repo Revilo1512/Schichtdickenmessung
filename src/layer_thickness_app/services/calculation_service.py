@@ -41,9 +41,8 @@ class CalculationService:
     def __init__(self, plausibility_service: PlausibilityService | None = None):
         """
         The plausibility service is dependency-injected so the controller
-        can swap in a short-lived profile-bound instance for one
-        calculation and keep its own long-lived default service for
-        post-capture feedback.
+        can swap in a profile-bound instance for one calculation and keep
+        its own long-lived default service for post-capture feedback.
         """
         self.plausibility: PlausibilityService = (
             plausibility_service if plausibility_service is not None
@@ -74,11 +73,11 @@ class CalculationService:
         2. Build capture_stats (always populated, even on early exit).
         3. Plausibility gate — hard errors abort here.
         4. Material lookup (k).
-        5. Absorption coefficient (α).
+        5. Absorption coefficient (alpha).
         6. Linearisation.
-        7. Beer-Lambert → thickness in nm.
+        7. Beer-Lambert -> thickness in nm.
         """
-        # ── 1. Frame-count consistency ───────────────────────────────
+        # -- 1. Frame-count consistency --
         if ref_result.frame_count != mat_result.frame_count:
             error_msg = (
                 f"Frame count mismatch: reference={ref_result.frame_count}, "
@@ -91,24 +90,22 @@ class CalculationService:
         material_path = f"{shelf}/{book}/{page}"
         logger.info(
             "calculate_thickness_from_captures | material=%s | λ=%.4f µm | "
-            "ref_gray=%.3f hotspot=%.3f sat=%.4f n=%d | "
-            "mat_gray=%.3f hotspot=%.3f sat=%.4f n=%d",
+            "ref_gray=%.3f sat=%.4f n=%d | "
+            "mat_gray=%.3f sat=%.4f n=%d",
             material_path, wavelength_um,
-            ref_result.gray_mean, ref_result.hotspot_mean,
+            ref_result.gray_mean,
             ref_result.saturated_fraction, ref_result.frames_used,
-            mat_result.gray_mean, mat_result.hotspot_mean,
+            mat_result.gray_mean,
             mat_result.saturated_fraction, mat_result.frames_used,
         )
 
-        # ── 2. Capture stats (returned even on early failure) ────────
+        # -- 2. Capture stats (returned even on early failure) --
         frame_count = ref_result.frame_count
         capture_stats: dict[str, Any] = {
             "MeanGrayRef":          round(ref_result.gray_mean, 4),
             "MeanGraySample":       round(mat_result.gray_mean, 4),
             "StdGrayRef":           round(ref_result.gray_std,  4),
             "StdGraySample":        round(mat_result.gray_std,  4),
-            "HotspotRef":           round(ref_result.hotspot_mean, 4),
-            "HotspotSample":        round(mat_result.hotspot_mean, 4),
             "SaturatedFractionRef": round(ref_result.saturated_fraction, 6),
             "SaturatedFractionSample": round(mat_result.saturated_fraction, 6),
             "FrameCountRef":        ref_result.frame_count,
@@ -116,7 +113,7 @@ class CalculationService:
             "Mode":                 "multi" if frame_count > 1 else "single",
         }
 
-        # ── 3. Plausibility gate ─────────────────────────────────────
+        # -- 3. Plausibility gate --
         plaus = self.plausibility.check_pair_captures(
             reference_capture = ref_result,
             sample_capture    = mat_result,
@@ -130,29 +127,23 @@ class CalculationService:
             )
             return None, f"{plaus.title}: {plaus.message}", capture_stats
 
-        if plaus.is_warning:
-            logger.info(
-                "Plausibility warning (non-blocking): %s — %s",
-                plaus.code.value, plaus.title,
-            )
-
-        # ── 4. Extinction coefficient k ──────────────────────────────
+        # -- 4. Extinction coefficient k --
         k, k_error = self._get_extinction_coefficient(shelf, book, page, wavelength_um)
         if k_error:
             return None, k_error, capture_stats
 
-        # ── 5. Absorption coefficient α ──────────────────────────────
+        # -- 5. Absorption coefficient alpha --
         try:
             alpha_cm = self.calculate_alpha(k, wavelength_um)
             logger.info("α = %.4e cm⁻¹", alpha_cm)
         except ValueError as e:
             return None, f"Math Error: {e}", capture_stats
 
-        # ── 6. Linearise the pre-computed gray means ─────────────────
+        # -- 6. Linearise the pre-computed gray means --
         lin_ref = self.linearize_mean_pixel_value(ref_result.gray_mean)
         lin_mat = self.linearize_mean_pixel_value(mat_result.gray_mean)
 
-        # ── 7. Beer-Lambert → thickness ──────────────────────────────
+        # -- 7. Beer-Lambert -> thickness --
         thickness_nm = self.calculate_thickness_from_intensity(
             intensity_transmitted = lin_mat,
             intensity_initial     = lin_ref,
@@ -225,7 +216,7 @@ class CalculationService:
         alpha:                 float,
     ) -> float | None:
         """
-        Beer-Lambert:  I = I₀ · e^(−α·d)   →   d = −ln(I / I₀) / α
+        Beer-Lambert:  I = I0 * e^(-alpha*d)   ->   d = -ln(I / I0) / alpha
         Returns thickness in nm, or None if inputs are unphysical.
         """
         if intensity_transmitted <= 0 or intensity_initial <= 0 or alpha == 0:
@@ -244,7 +235,7 @@ class CalculationService:
             return None
 
     def calculate_alpha(self, k: float, lambda_um: float) -> float:
-        """Absorption coefficient α [cm⁻¹]:  α = 4π·k / λ"""
+        """Absorption coefficient alpha [cm^-1]:  alpha = 4*pi*k / lambda"""
         if lambda_um <= 0:
             raise ValueError("Wavelength must be > 0.")
         lambda_cm = lambda_um * 1e-4

@@ -818,18 +818,15 @@ class MeasurePage(QWidget):
     @staticmethod
     def _format_capture_stats(capture: "FrameCaptureResult") -> str:
         sat_pct  = capture.saturated_fraction * 100.0
-        hotspot  = capture.hotspot_mean
         if capture.frame_count == 1:
             return (
                 f"n=1 • μ={capture.gray_mean:.2f}"
-                f" • spot={hotspot:.1f}"
                 f" • sat={sat_pct:.2f}%"
             )
         return (
             f"n={capture.frames_used}/{capture.frame_count}"
             f" • σ={capture.gray_std:.2f}"
             f" • μ={capture.gray_mean:.2f}"
-            f" • spot={hotspot:.1f}"
             f" • sat={sat_pct:.2f}%"
             f" • outliers: {capture.outliers_rejected}"
         )
