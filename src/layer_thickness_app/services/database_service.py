@@ -15,6 +15,8 @@ VALID_COLUMNS = frozenset({
     "MeanGrayRef", "MeanGraySample",
     "StdGrayRef", "StdGraySample",
     "FrameCountRef", "FrameCountSample",
+    "HotspotRef", "HotspotSample",
+    "SaturatedFractionRef", "SaturatedFractionSample",
     "Probe", "RunIndex",
 })
 
@@ -49,6 +51,7 @@ class DatabaseService:
 
             self._create_measurements_table()
             self._create_calibrations_table()
+            self._migrate_schema()
             self._create_indexes()
         except (sqlite3.Error, OSError) as e:
             logger.error("Database connection/setup error at %s: %s", db_path, e)
@@ -61,29 +64,33 @@ class DatabaseService:
     def _create_measurements_table(self):
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS measurements (
-                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-                Date               TIMESTAMP DEFAULT (DATETIME('now', 'localtime')),
-                Name               TEXT,
-                Layer              REAL NOT NULL,
-                Wavelength         REAL,
-                RefImage           TEXT NOT NULL,
-                MatImage           TEXT NOT NULL,
-                Shelf              TEXT NOT NULL,
-                Book               TEXT NOT NULL,
-                Page               TEXT NOT NULL,
-                Note               TEXT,
-                Mode               TEXT    DEFAULT 'single',
-                ThicknessCorrected REAL,
-                ReferenceThickness REAL,
-                SessionTag         TEXT,
-                MeanGrayRef        REAL,
-                MeanGraySample     REAL,
-                StdGrayRef         REAL,
-                StdGraySample      REAL,
-                FrameCountRef      INTEGER,
-                FrameCountSample   INTEGER,
-                Probe              TEXT,
-                RunIndex           INTEGER
+                id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                Date                     TIMESTAMP DEFAULT (DATETIME('now', 'localtime')),
+                Name                     TEXT,
+                Layer                    REAL NOT NULL,
+                Wavelength               REAL,
+                RefImage                 TEXT NOT NULL,
+                MatImage                 TEXT NOT NULL,
+                Shelf                    TEXT NOT NULL,
+                Book                     TEXT NOT NULL,
+                Page                     TEXT NOT NULL,
+                Note                     TEXT,
+                Mode                     TEXT    DEFAULT 'single',
+                ThicknessCorrected       REAL,
+                ReferenceThickness       REAL,
+                SessionTag               TEXT,
+                MeanGrayRef              REAL,
+                MeanGraySample           REAL,
+                StdGrayRef               REAL,
+                StdGraySample            REAL,
+                FrameCountRef            INTEGER,
+                FrameCountSample         INTEGER,
+                HotspotRef               REAL,
+                HotspotSample            REAL,
+                SaturatedFractionRef     REAL,
+                SaturatedFractionSample  REAL,
+                Probe                    TEXT,
+                RunIndex                 INTEGER
             )
         """)
         self.conn.commit()
@@ -134,6 +141,70 @@ class DatabaseService:
             self.conn.commit()
         except sqlite3.Error as e:
             logger.error("Error creating indexes: %s", e)
+
+    # ==================================================================
+    # Schema migration
+    # ==================================================================
+    #
+    # Columns added after the initial release. ``CREATE TABLE IF NOT
+    # EXISTS`` covers fresh installs; on existing databases the table
+    # already exists and CREATE is a no-op, so any new column has to be
+    # added by ALTER TABLE. _migrate_schema is idempotent: it inspects
+    # PRAGMA table_info and only issues ALTER for columns that aren't
+    # there yet. New columns added in the future just need an entry in
+    # the dicts below.
+
+    _MEASUREMENT_MIGRATIONS: dict[str, str] = {
+        "HotspotRef":              "REAL",
+        "HotspotSample":           "REAL",
+        "SaturatedFractionRef":    "REAL",
+        "SaturatedFractionSample": "REAL",
+    }
+
+    _CALIBRATION_MIGRATIONS: dict[str, str] = {
+        # Reserved for future use. Keep alphabetised when adding.
+    }
+
+    def _migrate_schema(self) -> None:
+        self._add_missing_columns("measurements", self._MEASUREMENT_MIGRATIONS)
+        self._add_missing_columns("calibrations", self._CALIBRATION_MIGRATIONS)
+
+    def _add_missing_columns(
+        self, table: str, expected: dict[str, str],
+    ) -> None:
+        """Add any (column, sql_type) pair from ``expected`` not on ``table``."""
+        if not expected:
+            return
+        try:
+            self.cursor.execute(f"PRAGMA table_info({table})")
+            existing = {row["name"] for row in self.cursor.fetchall()}
+        except sqlite3.Error as e:
+            logger.error("Migration probe failed for %s: %s", table, e)
+            return
+
+        added: list[str] = []
+        for col, sql_type in expected.items():
+            if col in existing:
+                continue
+            try:
+                # ALTER TABLE ADD COLUMN cannot be parameterised; column
+                # names and types come from this module only, never from
+                # user input.
+                self.cursor.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {col} {sql_type}"
+                )
+                added.append(col)
+            except sqlite3.Error as e:
+                logger.error(
+                    "Migration failed: could not add %s.%s (%s): %s",
+                    table, col, sql_type, e,
+                )
+        if added:
+            self.conn.commit()
+            logger.info(
+                "Schema migration: added %d column(s) to %s: %s",
+                len(added), table, ", ".join(added),
+            )
 
     # ==================================================================
     # Measurements - write

@@ -13,7 +13,6 @@ workflows for traceable, capability-verified results.
 - **Single-frame** mode for fast measurements and **multi-frame**
   averaging mode (configurable, default 30 frames) with per-frame
   outlier rejection (σ-clipping) for noise reduction.
-- Live grayscale readout while capturing.
 - Live plausibility checks: saturation warnings, low-signal warnings,
   ref-vs-sample sanity (sample must be darker), per-material expected
   thickness ranges.
@@ -72,7 +71,6 @@ workflows for traceable, capability-verified results.
 | Camera | `pyueye` + IDS Software Suite |
 | Material data | `refractiveindex2`, PyYAML |
 | Persistence | SQLite (stdlib `sqlite3`) |
-| Onboarding video | `pytubefix` |
 | Package manager | [`uv`](https://github.com/astral-sh/uv) (recommended) |
 
 ## Prerequisites

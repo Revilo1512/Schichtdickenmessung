@@ -1,16 +1,17 @@
 """
 Linearity study across multiple reference thicknesses.
 
-Plots the systematic deviation
-(x_meas − x_ref) against x_ref over the full thickness range and fits
-a regression line. The linearity figure-of-merit is:
+Plots the systematic deviation (x_meas − x_ref) against x_ref over the
+full thickness range and fits a regression line. The linearity
+figure-of-merit follows the Minitab / ISO 22514-7 convention:
 
-    Linearität = |slope| · Prozessstreuung     
+    Linearity = |slope| · process_spread
 
-where the process spread is 6 · σ_pooled across all thicknesses. A flat
-regression (low |slope|) means the systematic deviation is constant
-over the range, which is the desirable behaviour and exactly what the
-linear correction in ``calibration_service`` is supposed to produce.
+where the process spread is 6 · σ_pooled across all reference
+thicknesses. A flat regression (low |slope|) means the systematic
+deviation is constant over the range, which is the desirable
+behaviour and exactly what the linear correction in
+``calibration_service`` is supposed to produce.
 """
 
 from __future__ import annotations

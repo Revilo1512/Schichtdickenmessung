@@ -13,7 +13,7 @@ Operator notes
   warn threshold to a value just above that. Don't exceed the err
   threshold; clipped pixels in the spot invalidate the measurement.
 * ``hotspot_warn`` / ``hotspot_err`` — minimum acceptable spot intensity
-  (mean over the top 1 % of pixels). For the thickest layer in your
+  (mean over the top 0.5 % of pixels). For the thickest layer in your
   campaign, the spot should still sit comfortably above the warn
   threshold; if it drops below ``hotspot_err`` the Beer-Lambert output
   is dominated by sensor noise.

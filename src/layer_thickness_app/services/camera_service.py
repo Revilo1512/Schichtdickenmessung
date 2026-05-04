@@ -24,10 +24,10 @@ class FrameCaptureResult:
     fields describe the *averaged* image and feed the plausibility gate:
 
     gray_p99           : 99th percentile of luminance (saturation tail).
-    hotspot_mean       : mean over the top 1 % brightest pixels — robust
-                         estimator of the laser spot intensity, valid
-                         whether the spot fills the frame (thin layer)
-                         or shrinks to a point (thick layer).
+    hotspot_mean       : mean over the top 0.5 % brightest pixels —
+                         robust estimator of the laser spot intensity,
+                         valid whether the spot fills the frame (thin
+                         layer) or shrinks to a point (thick layer).
     saturated_fraction : fraction of pixels at or above 254 — detects
                          clipping even when most of the frame is dark.
     """

@@ -48,9 +48,9 @@ class AppConfig(QObject):
     PLAUSIBILITY_SAT_FRAC_ERR:  float = 0.0050
     PLAUSIBILITY_SAT_FRAC_WARN: float = 0.0010
 
-    # Signal strength is the mean over the top 1 % of pixels (the laser
-    # spot). For thick layers most of the frame is dark, but the spot
-    # itself must remain well above the sensor noise floor.
+    # Signal strength is the mean over the top 0.5 % of pixels (the
+    # laser spot). For thick layers most of the frame is dark, but the
+    # spot itself must remain well above the sensor noise floor.
     PLAUSIBILITY_HOTSPOT_ERR:  float = 25.0
     PLAUSIBILITY_HOTSPOT_WARN: float = 50.0
 

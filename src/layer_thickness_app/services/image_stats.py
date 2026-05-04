@@ -48,10 +48,11 @@ def compute_image_stats(frame: np.ndarray) -> ImageStats:
     Per-pixel statistics on a single frame.
 
     ``hotspot_mean`` is the mean over the top ``_HOTSPOT_FRACTION`` of
-    pixels by luminance — a robust estimate of the laser spot intensity
-    that does not require locating the spot. ``saturated_fraction`` is
-    the fraction of pixels at or above ``_SATURATION_VALUE`` and detects
-    clipping even when most of the frame is dark.
+    pixels by luminance (0.5 % by default) — a robust estimate of the
+    laser spot intensity that does not require locating the spot.
+    ``saturated_fraction`` is the fraction of pixels at or above
+    ``_SATURATION_VALUE`` and detects clipping even when most of the
+    frame is dark.
     """
     gray = _to_gray(frame).ravel()
     n = gray.size

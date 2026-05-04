@@ -7,7 +7,7 @@ spot statistics rather than the global gray mean:
 
   * Saturation is detected by the fraction of pixels at or above 254
     (clipping in the spot, even when most of the frame is dark).
-  * Signal strength is the mean over the top 1 % of pixels (the spot
+  * Signal strength is the mean over the top 0.5 % of pixels (the spot
     itself), which stays meaningful for thick layers where the spot
     shrinks and drags the global mean below the noise floor.
 

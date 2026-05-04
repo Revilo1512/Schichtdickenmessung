@@ -8,10 +8,10 @@ Capability indices (Minitab / ISO 22514-7 conventions):
 
 with the Minitab defaults K = 20, L = 6.
 
-Repeatability variation:
+Variation aggregates (Minitab / ISO 22514-7):
 
-    %Var(repeat)         = (6 · s)             / Tol · 100 %
-    %Var(repeat + bias)  = (6 · s + |bias|·2)  / Tol · 100 %
+    %Var(repeatability)        =  6 · s / Tol · 100 %
+    %Var(repeatability + bias) =  √((6·s)² + (2·|bias|)²) / Tol · 100 %
 
 Bias significance: a one-sample t-test of (x_i − x_ref) against zero,
 matching the "Test syst. Mssabw=0" line in the standard Minitab report.
