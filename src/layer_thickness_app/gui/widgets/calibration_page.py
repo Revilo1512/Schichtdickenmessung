@@ -332,7 +332,7 @@ class CalibrationPage(QWidget):
         self.holdout_combo.blockSignals(True)
         self.holdout_combo.clear()
         for r in refs:
-            self.holdout_combo.addItem(f"{r:g} nm", float(r))
+            self.holdout_combo.addItem(f"{r:g} nm", None, float(r))
         self.holdout_combo.setCurrentIndex(-1 if not refs else 0)
         self.holdout_combo.blockSignals(False)
 

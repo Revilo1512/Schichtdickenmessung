@@ -284,7 +284,7 @@ class ValidationPage(QWidget):
         if self.reference_combo.count() == 0:
             self.reference_combo.blockSignals(True)
             for r in refs:
-                self.reference_combo.addItem(f"{r:g} nm", float(r))
+                self.reference_combo.addItem(f"{r:g} nm", None, float(r))
             self.reference_combo.blockSignals(False)
 
         ref_value = self.reference_combo.currentData()
@@ -344,7 +344,7 @@ class ValidationPage(QWidget):
 
         seen_ids: set[int] = set()
         if active is not None:
-            self.model_combo.addItem(f"★ ACTIVE · {active.summary()}", active.id)
+            self.model_combo.addItem(f"★ ACTIVE · {active.summary()}", None, active.id)
             self._models.append(active)
             if active.id is not None:
                 seen_ids.add(active.id)
@@ -352,7 +352,7 @@ class ValidationPage(QWidget):
         for m in models:
             if m.id in seen_ids:
                 continue
-            self.model_combo.addItem(m.summary(), m.id)
+            self.model_combo.addItem(m.summary(), None, m.id)
             self._models.append(m)
 
         self.model_combo.setCurrentIndex(1 if self.model_combo.count() > 1 else 0)
