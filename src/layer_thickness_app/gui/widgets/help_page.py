@@ -14,13 +14,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QFont
-
-try:
-    from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
-    from PyQt6.QtMultimediaWidgets import QVideoWidget
-    MULTIMEDIA_AVAILABLE = True
-except ImportError:
-    MULTIMEDIA_AVAILABLE = False
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
+from PyQt6.QtMultimediaWidgets import QVideoWidget
 
 from layer_thickness_app.gui.theme import (
     PREVIEW_BG, PREVIEW_FG, borderless_style,
@@ -77,14 +72,11 @@ class HelpPage(QWidget):
         desc_label.setStyleSheet("font-size: 14px; margin-bottom: 20px;")
         layout.addWidget(desc_label)
 
-        if VIDEO_PATH.exists() and MULTIMEDIA_AVAILABLE:
+        if VIDEO_PATH.exists():
             logger.info("Tutorial video found. Initializing video player.")
             self._setup_video_player(layout)
         else:
-            if not VIDEO_PATH.exists():
-                logger.warning("Tutorial video not found at: %s", VIDEO_PATH)
-            if not MULTIMEDIA_AVAILABLE:
-                logger.warning("PyQt6.QtMultimedia is not available. Cannot play video.")
+            logger.warning("Tutorial video not found at: %s", VIDEO_PATH)
             self._setup_placeholder(layout)
 
     def _setup_placeholder(self, layout: QVBoxLayout):

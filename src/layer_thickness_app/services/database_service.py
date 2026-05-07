@@ -51,7 +51,6 @@ class DatabaseService:
 
             self._create_measurements_table()
             self._create_calibrations_table()
-            self._migrate_schema()
             self._create_indexes()
         except (sqlite3.Error, OSError) as e:
             logger.error("Database connection/setup error at %s: %s", db_path, e)
@@ -141,70 +140,6 @@ class DatabaseService:
             self.conn.commit()
         except sqlite3.Error as e:
             logger.error("Error creating indexes: %s", e)
-
-    # ==================================================================
-    # Schema migration
-    # ==================================================================
-    #
-    # Columns added after the initial release. ``CREATE TABLE IF NOT
-    # EXISTS`` covers fresh installs; on existing databases the table
-    # already exists and CREATE is a no-op, so any new column has to be
-    # added by ALTER TABLE. _migrate_schema is idempotent: it inspects
-    # PRAGMA table_info and only issues ALTER for columns that aren't
-    # there yet. New columns added in the future just need an entry in
-    # the dicts below.
-
-    _MEASUREMENT_MIGRATIONS: dict[str, str] = {
-        "HotspotRef":              "REAL",
-        "HotspotSample":           "REAL",
-        "SaturatedFractionRef":    "REAL",
-        "SaturatedFractionSample": "REAL",
-    }
-
-    _CALIBRATION_MIGRATIONS: dict[str, str] = {
-        # Reserved for future use. Keep alphabetised when adding.
-    }
-
-    def _migrate_schema(self) -> None:
-        self._add_missing_columns("measurements", self._MEASUREMENT_MIGRATIONS)
-        self._add_missing_columns("calibrations", self._CALIBRATION_MIGRATIONS)
-
-    def _add_missing_columns(
-        self, table: str, expected: dict[str, str],
-    ) -> None:
-        """Add any (column, sql_type) pair from ``expected`` not on ``table``."""
-        if not expected:
-            return
-        try:
-            self.cursor.execute(f"PRAGMA table_info({table})")
-            existing = {row["name"] for row in self.cursor.fetchall()}
-        except sqlite3.Error as e:
-            logger.error("Migration probe failed for %s: %s", table, e)
-            return
-
-        added: list[str] = []
-        for col, sql_type in expected.items():
-            if col in existing:
-                continue
-            try:
-                # ALTER TABLE ADD COLUMN cannot be parameterised; column
-                # names and types come from this module only, never from
-                # user input.
-                self.cursor.execute(
-                    f"ALTER TABLE {table} ADD COLUMN {col} {sql_type}"
-                )
-                added.append(col)
-            except sqlite3.Error as e:
-                logger.error(
-                    "Migration failed: could not add %s.%s (%s): %s",
-                    table, col, sql_type, e,
-                )
-        if added:
-            self.conn.commit()
-            logger.info(
-                "Schema migration: added %d column(s) to %s: %s",
-                len(added), table, ", ".join(added),
-            )
 
     # ==================================================================
     # Measurements - write
@@ -435,10 +370,10 @@ class DatabaseService:
             query += " AND Probe = :probe"
             params["probe"] = probe
         if wavelength_um is not None:
-            query += " AND (Wavelength IS NULL OR Wavelength = :wavelength)"
+            query += " AND Wavelength = :wavelength"
             params["wavelength"] = wavelength_um
         if mode:
-            query += " AND (Mode IS NULL OR Mode = :mode)"
+            query += " AND Mode = :mode"
             params["mode"] = mode
         query += " ORDER BY ReferenceThickness ASC, Date ASC"
         try:
@@ -492,10 +427,10 @@ class DatabaseService:
             query += " AND Probe = :probe"
             params["probe"] = probe
         if wavelength_um is not None:
-            query += " AND (Wavelength IS NULL OR Wavelength = :wavelength)"
+            query += " AND Wavelength = :wavelength"
             params["wavelength"] = wavelength_um
         if mode:
-            query += " AND (Mode IS NULL OR Mode = :mode)"
+            query += " AND Mode = :mode"
             params["mode"] = mode
         query += " ORDER BY Date ASC"
         try:

@@ -167,7 +167,7 @@ class CalibrationService:
         for r in rows:
             if r.get("ReferenceThickness") is None or r.get("Layer") is None:
                 continue
-            if mode and r.get("Mode") and r["Mode"] != mode:
+            if mode and r["Mode"] != mode:
                 continue
             measured.append(r["Layer"])
             reference.append(r["ReferenceThickness"])

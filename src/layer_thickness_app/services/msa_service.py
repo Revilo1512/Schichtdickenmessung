@@ -26,12 +26,7 @@ import math
 from dataclasses import dataclass, asdict
 
 import numpy as np
-
-try:
-    from scipy import stats as _scipy_stats
-    _HAS_SCIPY = True
-except Exception:
-    _HAS_SCIPY = False
+from scipy import stats as _scipy_stats
 
 logger = logging.getLogger(__name__)
 
@@ -178,10 +173,11 @@ class MSAService:
 
     # ------------------------------------------------------------------
     # Cross-mode precision comparison (Single-Frame vs Multi-Frame).
-    # Welch's t-test on the absolute deviations from the reference is a
-    # simple way to quantify whether one mode is meaningfully more
-    # precise; equal-variance assumption is dropped because the two
-    # modes have different noise profiles by construction.
+    #
+    # Reports the per-mode standard deviation and an F-test of variance
+    # equality. A large F = var_single / var_multi with p < 0.05 confirms
+    # that the multi-frame mode is significantly more precise — exactly
+    # what the BA1 §4.3.3 precision validation requires.
     # ------------------------------------------------------------------
     def compare_precision(
         self,
@@ -198,17 +194,13 @@ class MSAService:
         std_multi  = float(m.std(ddof=1))
         ratio = std_single / std_multi if std_multi > 0 else float("inf")
 
-        # F-test for variance equality. A large F (single more variable
-        # than multi) with p < 0.05 confirms the precision improvement.
+        # F-test for variance equality (one-sided: H1 var_single > var_multi).
         var_s = std_single ** 2
         var_m = std_multi  ** 2
         if var_m > 0:
             f_stat = var_s / var_m
             df1, df2 = s.size - 1, m.size - 1
-            if _HAS_SCIPY:
-                p_f = 1.0 - _scipy_stats.f.cdf(f_stat, df1, df2)
-            else:
-                p_f = float("nan")
+            p_f = 1.0 - _scipy_stats.f.cdf(f_stat, df1, df2)
         else:
             f_stat = float("inf")
             p_f    = 0.0
@@ -273,12 +265,5 @@ class MSAService:
             return float("inf") if mean_diff != 0.0 else 0.0, 0.0 if mean_diff != 0.0 else 1.0
 
         t_stat = mean_diff / (s / math.sqrt(n))
-
-        if _HAS_SCIPY:
-            p_value = float(2.0 * (1.0 - _scipy_stats.t.cdf(abs(t_stat), df=n - 1)))
-        else:
-            # Normal-approximation fallback when scipy isn't available.
-            # Acceptable for n >= 25; documented in the report.
-            p_value = float(2.0 * (1.0 - 0.5 * (1.0 + math.erf(abs(t_stat) / math.sqrt(2.0)))))
-
+        p_value = float(2.0 * (1.0 - _scipy_stats.t.cdf(abs(t_stat), df=n - 1)))
         return float(t_stat), float(p_value)
