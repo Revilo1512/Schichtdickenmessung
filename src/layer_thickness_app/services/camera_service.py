@@ -322,6 +322,7 @@ class CameraService:
         self,
         n_frames:      int   = 1,
         outlier_sigma: float = 3.0,
+        wavelength_um: float = 0.635,
     ) -> FrameCaptureResult | None:
         """
         Capture one or more frames and return a FrameCaptureResult.
@@ -332,6 +333,10 @@ class CameraService:
         are returned. Returns None if the camera is not connected, or if
         fewer than _MIN_USABLE_FRACTION of the requested frames came
         back from hardware.
+
+        ``wavelength_um`` selects the Bayer channel used for the hotspot
+        statistic (635 nm → red, 532 nm → green). Whole-frame gray
+        statistics are wavelength-independent and always use ITU-R 601.
         """
         if not self.is_connected:
             logger.error("capture_frame: camera not connected.")
@@ -342,7 +347,7 @@ class CameraService:
             if raw is None:
                 return None
             gray = _bgr_frame_to_gray_scalar(raw)
-            stats = compute_image_stats(raw)
+            stats = compute_image_stats(raw, wavelength_um=wavelength_um)
             return FrameCaptureResult(
                 image              = raw,
                 gray_mean          = gray,
@@ -434,7 +439,7 @@ class CameraService:
 
         # Spatial stats on the averaged image — this is what plausibility
         # and any downstream user inspection actually see.
-        stats = compute_image_stats(avg_frame)
+        stats = compute_image_stats(avg_frame, wavelength_um=wavelength_um)
 
         logger.info(
             "Multi-frame result: frames_used=%d, outliers=%d, "

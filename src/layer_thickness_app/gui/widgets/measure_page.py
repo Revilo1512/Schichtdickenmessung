@@ -559,7 +559,11 @@ class MeasurePage(QWidget):
         self.material_changed.emit(path)
 
     def _on_sample_button_clicked(self):
-        if self._batch_active:
+        # Route to the batch flow whenever the user has Batch Mode
+        # enabled in the UI. _batch_active only becomes True after the
+        # first batch capture, but the very first click also needs to
+        # reach the batch handler so it can initialise the run counter.
+        if self.batch_mode_checkbox.isChecked():
             self.batch_sample_requested.emit()
         else:
             self.capture_material_requested.emit()

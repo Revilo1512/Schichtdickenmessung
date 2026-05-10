@@ -1,5 +1,5 @@
 """
-Material profiles — per-material thresholds and expected ranges.
+Material profiles - per-material thresholds and expected ranges.
 
 Each profile is keyed by the (shelf, book, page) tuple that matches the
 refractiveindex.info catalog entry used for the measurement. Profiles
@@ -8,21 +8,21 @@ expected-range and wavelength defaults for the selected material.
 
 Operator notes
 --------------
-* ``saturation_frac_err`` — capture 10 references with no probe in the
+* ``saturation_frac_err`` - capture 10 references with no probe in the
   beam and note the maximum ``saturated_fraction`` observed. Set the
   threshold to a value above that. Clipped pixels invalidate the
   measurement.
-* ``gray_mean_min`` — minimum full-image gray mean (ITU-R 601) below
+* ``gray_mean_min`` - minimum full-image gray mean (ITU-R 601) below
   which the signal is indistinguishable from sensor noise. Capture a
   frame with the laser off and note the gray mean; the threshold
   should sit above this dark-current level.
-* ``expected_range_nm`` — the (min, max) thickness range you expect for
+* ``expected_range_nm`` - the (min, max) thickness range expected for
   this material. Used to pre-populate the reference-thickness input and
   to hint at the measurable range in messages.
-* ``supported_wavelengths_um`` — the wavelengths verified for this
+* ``supported_wavelengths_um`` - the wavelengths verified for this
   material against this catalog entry. Used to cross-check the user's
   selection.
-* ``shelf`` / ``book`` / ``page`` — the catalog keys. Confirm the exact
+* ``shelf`` / ``book`` / ``page`` - the catalog keys. Confirm the exact
   triple on https://refractiveindex.info before populating.
 """
 

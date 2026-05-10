@@ -26,17 +26,22 @@ class CalculationService:
     Entry point
     -----------
     calculate_thickness_from_captures() — accepts two FrameCaptureResult
-    objects whose gray_mean values have already been computed by the
+    objects whose hotspot_mean values have already been computed by the
     multi-frame averaging logic. Runs the plausibility gate FIRST and
     aborts early on hard errors. Returns
     (thickness_nm | None, error_msg | None, capture_stats: dict).
     """
 
-    # Linearisation constants (sRGB gamma approximation).
+    # Linearisation constants (sRGB inverse companding per IEC 61966-2-1).
+    # For C_srgb <= LIN_THRESHOLD the linear branch C_lin = C_srgb / LIN_DIV
+    # is used; above the threshold the exponential branch
+    # C_lin = ((C_srgb + OFFSET_1) / OFFSET_2) ** EXPONENT is used.
     # Do not change without re-running the full calibration.
     LINEARIZATION_OFFSET_1 = 0.055
-    LINEARIZATION_OFFSET_2 = 1.005
+    LINEARIZATION_OFFSET_2 = 1.055
     LINEARIZATION_EXPONENT = 2.4
+    LINEARIZATION_THRESHOLD = 0.04045
+    LINEARIZATION_LINEAR_DIVISOR = 12.92
 
     def __init__(self, plausibility_service: PlausibilityService | None = None):
         """
@@ -100,17 +105,23 @@ class CalculationService:
         )
 
         # -- 2. Capture stats (returned even on early failure) --
+        # HotspotRef / HotspotSample are the actual Beer-Lambert inputs
+        # and must be persisted alongside the gray-mean diagnostics so
+        # the stored measurement is fully reproducible from the raw
+        # frames.
         frame_count = ref_result.frame_count
         capture_stats: dict[str, Any] = {
-            "MeanGrayRef":          round(ref_result.gray_mean, 4),
-            "MeanGraySample":       round(mat_result.gray_mean, 4),
-            "StdGrayRef":           round(ref_result.gray_std,  4),
-            "StdGraySample":        round(mat_result.gray_std,  4),
-            "SaturatedFractionRef": round(ref_result.saturated_fraction, 6),
+            "MeanGrayRef":             round(ref_result.gray_mean, 4),
+            "MeanGraySample":          round(mat_result.gray_mean, 4),
+            "StdGrayRef":              round(ref_result.gray_std,  4),
+            "StdGraySample":           round(mat_result.gray_std,  4),
+            "HotspotRef":              round(ref_result.hotspot_mean, 4),
+            "HotspotSample":           round(mat_result.hotspot_mean, 4),
+            "SaturatedFractionRef":    round(ref_result.saturated_fraction, 6),
             "SaturatedFractionSample": round(mat_result.saturated_fraction, 6),
-            "FrameCountRef":        ref_result.frame_count,
-            "FrameCountSample":     mat_result.frame_count,
-            "Mode":                 "multi" if frame_count > 1 else "single",
+            "FrameCountRef":           ref_result.frame_count,
+            "FrameCountSample":        mat_result.frame_count,
+            "Mode":                    "multi" if frame_count > 1 else "single",
         }
 
         # -- 3. Plausibility gate --
@@ -139,9 +150,17 @@ class CalculationService:
         except ValueError as e:
             return None, f"Math Error: {e}", capture_stats
 
-        # -- 6. Linearise the pre-computed gray means --
-        lin_ref = self.linearize_mean_pixel_value(ref_result.gray_mean)
-        lin_mat = self.linearize_mean_pixel_value(mat_result.gray_mean)
+        # -- 6. Linearise the laser-spot intensities --
+        # Use the hotspot mean (top 0.5 % of red-channel pixels) rather
+        # than the whole-frame gray mean. The laser spot covers only a
+        # tiny fraction of the image; gray_mean is dominated by dark
+        # background and would make reference and sample look almost
+        # identical, leading Beer-Lambert to underestimate the
+        # thickness. hotspot_mean is computed on the Bayer channel that
+        # matches the laser wavelength so the full photometric signal
+        # is preserved.
+        lin_ref = self.linearize_mean_pixel_value(ref_result.hotspot_mean)
+        lin_mat = self.linearize_mean_pixel_value(mat_result.hotspot_mean)
 
         # -- 7. Beer-Lambert -> thickness --
         thickness_nm = self.calculate_thickness_from_intensity(
@@ -199,14 +218,22 @@ class CalculationService:
 
     def linearize_mean_pixel_value(self, gw: float) -> float:
         """
-        sRGB gamma linearisation of a 0-255 gray value:
-            gw_norm_lin = ((gw / 255 + O1) / O2) ** E
+        sRGB gamma linearisation of a 0-255 gray value.
+
+        Uses both branches of the IEC 61966-2-1 inverse companding so
+        that very dark hotspot values (rare, but possible when the
+        sample is near the absorption limit) are not pushed into a
+        numerically unstable region of the exponential branch.
         """
-        gw_norm_lin = (
-            ((gw / 255.0) + self.LINEARIZATION_OFFSET_1)
-            / self.LINEARIZATION_OFFSET_2
-        ) ** self.LINEARIZATION_EXPONENT
-        logger.debug("Linearised gray %.4f → %.6f", gw, gw_norm_lin)
+        c = gw / 255.0
+        if c <= self.LINEARIZATION_THRESHOLD:
+            gw_norm_lin = c / self.LINEARIZATION_LINEAR_DIVISOR
+        else:
+            gw_norm_lin = (
+                (c + self.LINEARIZATION_OFFSET_1)
+                / self.LINEARIZATION_OFFSET_2
+            ) ** self.LINEARIZATION_EXPONENT
+        logger.debug("Linearised gray %.4f -> %.6f", gw, gw_norm_lin)
         return gw_norm_lin
 
     def calculate_thickness_from_intensity(

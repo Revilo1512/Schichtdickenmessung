@@ -124,6 +124,11 @@ class MainController:
         self.measurement_page.reset_requested.connect(self.on_reset_measurement)
         self.measurement_page.config_changed.connect(self._on_measure_config_changed)
         self.measurement_page.material_changed.connect(self._on_material_changed)
+        # Batch-mode capture: emitted by the Sample button when batch
+        # mode is active. Without this connection the batch UI is inert.
+        self.measurement_page.batch_sample_requested.connect(
+            self.on_batch_sample_capture
+        )
 
         # Calibration page
         try:
@@ -222,12 +227,15 @@ class MainController:
         if not self._require_camera_connected():
             return
         n_frames = self.measurement_page.get_frame_count()
+        wavelength_um = self._active_wavelength_um()
         self.measurement_page.set_result_text(
             f"Capturing reference ({n_frames} frame{'s' if n_frames > 1 else ''})..."
         )
         QApplication.processEvents()
 
-        capture = self.camera_service.capture_frame(n_frames=n_frames)
+        capture = self.camera_service.capture_frame(
+            n_frames=n_frames, wavelength_um=wavelength_um,
+        )
         if capture is None:
             self._fail("Capture Error",
                        "Failed to capture reference image. Check camera connection.")
@@ -244,12 +252,15 @@ class MainController:
         if not self._require_camera_connected():
             return
         n_frames = self.measurement_page.get_frame_count()
+        wavelength_um = self._active_wavelength_um()
         self.measurement_page.set_result_text(
             f"Capturing sample ({n_frames} frame{'s' if n_frames > 1 else ''})..."
         )
         QApplication.processEvents()
 
-        capture = self.camera_service.capture_frame(n_frames=n_frames)
+        capture = self.camera_service.capture_frame(
+            n_frames=n_frames, wavelength_um=wavelength_um,
+        )
         if capture is None:
             self._fail("Capture Error",
                        "Failed to capture sample image. Check camera connection.")
@@ -263,6 +274,97 @@ class MainController:
         self._surface_plausibility(
             self.plausibility_service.check_sample_capture(capture, ref_cap)
         )
+
+    # ------------------------------------------------------------------
+    # Batch mode
+    # ------------------------------------------------------------------
+    #
+    # Batch mode automates a series of repeated sample captures against
+    # a fixed reference. Each Sample-button click triggers a full
+    # capture-plus-calculate cycle with an auto-incrementing RunIndex
+    # and is saved without manual intervention. The reference is held
+    # for the entire batch so I0 stays identical across runs.
+
+    def on_batch_sample_capture(self):
+        page = self.measurement_page
+
+        if not self._require_camera_connected():
+            return
+
+        if page.reference_capture is None:
+            self._fail(
+                "Batch Error",
+                "Capture a reference image before starting the batch.",
+            )
+            return
+
+        ui = page.get_measurement_data()
+        if not ui["material_path"]:
+            self._fail("Batch Error", "Select a material first.")
+            return
+        if ui["reference_thickness_nm"] is None:
+            self._fail(
+                "Batch Error",
+                "Set a Reference Thickness (Calibration Mode) before "
+                "running a batch.",
+            )
+            return
+        if not ui["probe"]:
+            self._fail(
+                "Batch Error",
+                "Set a Probe identifier before running a batch.",
+            )
+            return
+
+        # Start the batch on the first sample of a series.
+        if not page.batch_is_active():
+            total = page.batch_runs_configured()
+            page.batch_start(total)
+            logger.info(
+                "Batch started: probe=%s ref=%.2f nm runs=%d",
+                ui["probe"], ui["reference_thickness_nm"], total,
+            )
+
+        page.batch_advance()
+
+        n_frames      = page.get_frame_count()
+        wavelength_um = self._active_wavelength_um()
+        page.set_result_text(
+            f"Batch run {page.batch_current_run()}/"
+            f"{page.batch_total_runs()} - capturing sample "
+            f"({n_frames} frame{'s' if n_frames > 1 else ''})..."
+        )
+        QApplication.processEvents()
+
+        capture = self.camera_service.capture_frame(
+            n_frames=n_frames, wavelength_um=wavelength_um,
+        )
+        if capture is None:
+            self._fail("Batch Capture Error", "Failed to capture sample.")
+            return
+
+        page.set_capture(capture, "material")
+
+        ref_cap = page.reference_capture
+        self._surface_plausibility(
+            self.plausibility_service.check_sample_capture(capture, ref_cap)
+        )
+
+        # Trigger the calculation+save path. The reset call after the
+        # save keeps the reference intact (keep_reference_checkbox is
+        # forced on via the batch lifecycle).
+        page.keep_reference_checkbox.setChecked(True)
+        page.save_measurement_checkbox.setChecked(True)
+        self.on_start_calc()
+
+        if page.batch_current_run() >= page.batch_total_runs():
+            page.batch_finish()
+            logger.info("Batch finished after %d runs.", page.batch_current_run())
+            page.show_info_bar(
+                "Batch Complete",
+                f"Captured {page.batch_total_runs()} runs for probe "
+                f"{ui['probe']}.",
+            )
 
     # ------------------------------------------------------------------
     # Calculation
@@ -497,6 +599,23 @@ class MainController:
             is_error=True,
         )
         return False
+
+    def _active_wavelength_um(self) -> float:
+        """
+        Read the active laser wavelength from the measurement page.
+
+        Returns the value selected in the wavelength combo box, or
+        falls back to 0.635 µm (red) if nothing is selected. The value
+        drives the Bayer-channel selection used for the hotspot
+        statistic in the camera service.
+        """
+        ui_value = self.measurement_page.wavelength_combo.currentData()
+        if ui_value is None:
+            logger.warning(
+                "No active wavelength in UI; defaulting to 0.635 µm.",
+            )
+            return 0.635
+        return float(ui_value)
 
     def _fail(self, title: str, message: str):
         logger.error("%s: %s", title, message)

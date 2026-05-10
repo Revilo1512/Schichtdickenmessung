@@ -3,17 +3,21 @@ Plausibility checks for transmission-based layer thickness measurements.
 
 Three hard-error gates run before Beer-Lambert calculation:
 
-  1. Saturation (open box)   — saturated_fraction >= threshold on
+  1. Saturation (open box)   - saturated_fraction >= threshold on
      either image indicates over-exposure or an open enclosure.
-  2. Signal too weak (dark)  — gray_mean below the noise floor on
+  2. Signal too weak (dark)  - gray_mean below the noise floor on
      either image means the sample is too thick for the measurable
      range, or the laser is off / blocked.
-  3. Samples swapped         — sample gray_mean > reference gray_mean
-     implies transmission >= 100 %, which is physically impossible.
+  3. Samples swapped         - the sample hotspot mean exceeds the
+     reference hotspot mean, which would imply transmission >= 100 %
+     and is physically impossible.
 
-All checks operate on the full-image gray mean (ITU-R 601 luminance
-averaged over every pixel), matching the value used for the
-Beer-Lambert calculation itself.
+The saturation and signal-strength checks operate on the whole-image
+ITU-R 601 luminance (saturation detects clipped pixels anywhere in
+the frame, the dark check detects a missing or fully blocked beam).
+The swap check operates on hotspot_mean - the same quantity that
+feeds the Beer-Lambert calculation - so the gate is consistent with
+the value actually compared downstream.
 """
 
 from __future__ import annotations
@@ -129,10 +133,16 @@ class PlausibilityService:
             reference_capture.gray_mean
             if reference_capture is not None else None
         )
+        ref_hotspot = (
+            reference_capture.hotspot_mean
+            if reference_capture is not None else None
+        )
         return self._check_sample(
             saturated_fraction = capture.saturated_fraction,
             gray_mean          = capture.gray_mean,
+            hotspot_mean       = capture.hotspot_mean,
             ref_gray_mean      = ref_gray,
+            ref_hotspot_mean   = ref_hotspot,
         )
 
     def check_pair_captures(
@@ -195,7 +205,9 @@ class PlausibilityService:
         self,
         saturated_fraction: float,
         gray_mean:          float,
+        hotspot_mean:       float,
         ref_gray_mean:      float | None = None,
+        ref_hotspot_mean:   float | None = None,
     ) -> PlausibilityResult:
         # 1. Saturation on sample (physically impossible unless swapped)
         if saturated_fraction >= self.sat_frac_err:
@@ -226,18 +238,25 @@ class PlausibilityService:
                 ),
             )
 
-        # 3. Swapped: sample brighter than reference
-        if ref_gray_mean is not None and gray_mean > ref_gray_mean:
+        # 3. Swapped: sample hotspot brighter than reference hotspot.
+        # The comparison is done on the same quantity that feeds the
+        # Beer-Lambert calculation; a swap there implies the calculated
+        # transmission ratio I/I0 would exceed 1.
+        if (
+            ref_hotspot_mean is not None
+            and hotspot_mean > ref_hotspot_mean
+        ):
             return PlausibilityResult(
                 ok       = False,
                 severity = PlausibilitySeverity.ERROR,
                 code     = PlausibilityCode.SAMPLES_SWAPPED,
                 title    = "Reference and Sample Swapped",
                 message  = (
-                    f"Sample gray mean ({gray_mean:.2f}) is higher than "
-                    f"reference gray mean ({ref_gray_mean:.2f}). This would "
-                    f"mean transmission >= 100 %, which is physically "
-                    f"impossible. Reference and sample were likely swapped."
+                    f"Sample hotspot mean ({hotspot_mean:.2f}) exceeds "
+                    f"reference hotspot mean ({ref_hotspot_mean:.2f}). "
+                    f"This would mean transmission >= 100 %, which is "
+                    f"physically impossible. Reference and sample were "
+                    f"likely swapped."
                 ),
             )
 

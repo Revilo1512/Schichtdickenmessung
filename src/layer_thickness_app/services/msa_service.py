@@ -176,8 +176,7 @@ class MSAService:
     #
     # Reports the per-mode standard deviation and an F-test of variance
     # equality. A large F = var_single / var_multi with p < 0.05 confirms
-    # that the multi-frame mode is significantly more precise — exactly
-    # what the BA1 §4.3.3 precision validation requires.
+    # that the multi-frame mode is significantly more precise.
     # ------------------------------------------------------------------
     def compare_precision(
         self,
