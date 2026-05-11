@@ -13,41 +13,59 @@ workflows for traceable, capability-verified results.
 - **Single-frame** mode for fast measurements and **multi-frame**
   averaging mode (configurable, default 30 frames) with per-frame
   outlier rejection (σ-clipping) for noise reduction.
-- Live plausibility checks: saturation warnings, low-signal warnings,
-  ref-vs-sample sanity (sample must be darker), per-material expected
-  thickness ranges.
+- Lambert–Beer input is the **hotspot mean** computed on the
+  wavelength-matched Bayer channel (red for 635 nm, green for 532 nm),
+  not the global gray mean. The ITU-R BT.601 gray mean is retained as
+  a plausibility diagnostic.
+- Pixel values are linearised via the sRGB inverse transfer function
+  (IEC 61966-2-1) before the I/I₀ ratio is formed.
+- Three-stage plausibility check (saturation, signal-too-weak,
+  reference/sample swapped) runs before every Beer–Lambert call.
+  All thresholds are per-material and live in `material_profiles.py`.
 - Optional **batch mode**: hold the reference fixed, auto-increment the
   run index, capture *N* repeats per probe for MSA studies.
 
 ### Calibration
 - Fit a linear correction model (`y = β₁·x + β₀`) from any subset of
   past calibration measurements.
-- Per-row train/test/ignore assignment with quick actions
+- Per-row train / test / ignore assignment with quick actions
   (all-train, random 70/30 split, hold-out by reference thickness).
 - Reports R², slope, intercept, and a before/after metrics panel
   showing bias / MAE / RMSE / max-|err| on the held-out test set.
 - Save & activate the model so subsequent measurements are
-  automatically corrected.
+  automatically corrected. Active models are pinned per
+  (material, wavelength, mode) triple — activating a new model
+  atomically deactivates the previous one.
+- Extrapolation warnings when a raw measurement falls outside the
+  fitted range.
 
 ### Validation (MSA Type 1)
 - Repeat-measurements capability study per probe.
-- Computes Cg and Cgk per Minitab/ISO 22514-7 conventions
-  (default K=20, L=6, capable threshold = 1.33).
-- Side-by-side raw vs corrected reports when a calibration is active —
-  quantifies whether the correction actually improved capability.
-- Exports a complete study (summary + CSVs) as a timestamped ZIP.
+- Computes Cg and Cgk per Minitab / ISO 22514-7 conventions
+  (default K = 20, L = 6, capable threshold = 1.33).
+- Side-by-side raw vs. corrected reports when a calibration is active.
+- Reports the t-statistic and p-value for the mean bias.
+- Exports a complete study (summary + raw CSV + corrected CSV +
+  calibration metadata) as a timestamped ZIP.
 
 ### Material catalog
 - Connected to **refractiveindex.info** via the `refractiveindex2`
-  package — pulls extinction coefficients for any catalog
+  package — pulls extinction coefficients `k(λ)` for any catalog
   shelf / book / page.
 - Material profiles override default plausibility thresholds and
-  expected-range hints for known materials (Cu Johnson & Christy,
-  Ti Rakić-LD shipped by default; easy to add more).
+  expected-range hints for known materials. Shipped by default:
+  - **Cu** — Johnson & Christy 1972 (noble metals), 20 – 120 nm.
+  - **Ti** — Johnson & Christy 1974 (transition metals), 15 – 100 nm.
+- Adding a new material is one entry in `material_profiles.py` plus
+  the corresponding refractiveindex.info shelf/book/page.
 
 ### Data management
 - Local SQLite database with measurements, calibration models, and
   schema migrations on startup.
+- Per-measurement persistence stores both the raw and corrected layer
+  values along with hotspot means (ref + sample), full-image gray
+  statistics, saturated-pixel fraction, frame counts, session tag,
+  probe, and run index.
 - Filterable history with pagination and per-row delete.
 - Import / export the entire database (or a filtered subset) to a
   self-contained ZIP archive (CSV + image files) for sharing or
@@ -62,16 +80,16 @@ workflows for traceable, capability-verified results.
 
 ## Tech Stack
 
-| Layer | Library |
-|---|---|
-| Language | Python 3.12+ |
-| GUI | PyQt6, [PyQt6-Fluent-Widgets](https://qfluentwidgets.com/) |
-| Numerics | NumPy |
-| Image processing | OpenCV (`opencv-python`) |
-| Camera | `pyueye` + IDS Software Suite |
-| Material data | `refractiveindex2`, PyYAML |
-| Persistence | SQLite (stdlib `sqlite3`) |
-| Package manager | [`uv`](https://github.com/astral-sh/uv) (recommended) |
+| Layer            | Library                                                  |
+|------------------|----------------------------------------------------------|
+| Language         | Python 3.12+                                             |
+| GUI              | PyQt6, [PyQt6-Fluent-Widgets](https://qfluentwidgets.com) |
+| Numerics         | NumPy, SciPy                                             |
+| Image processing | OpenCV (`opencv-python`)                                 |
+| Camera           | `pyueye` + IDS Software Suite                            |
+| Material data    | `refractiveindex2`, PyYAML                               |
+| Persistence      | SQLite (stdlib `sqlite3`)                                |
+| Package manager  | [`uv`](https://github.com/astral-sh/uv) (recommended)    |
 
 ## Prerequisites
 
@@ -148,12 +166,12 @@ python src/layer_thickness_app/main.py
 4. **Settings**: theme, window size.
 
 ### Keyboard shortcuts (Measure page)
-| Key | Action |
-|---|---|
-| `R` | Capture reference image |
-| `S` | Capture sample image |
-| `Enter` | Run calculation |
-| `Ctrl+S` | Toggle "save measurement" |
+| Key      | Action                       |
+|----------|------------------------------|
+| `R`      | Capture reference image      |
+| `S`      | Capture sample image         |
+| `Enter`  | Run calculation              |
+| `Ctrl+S` | Toggle "save measurement"    |
 
 ## Project Structure
 
@@ -189,12 +207,12 @@ Schichtdickenmessung/
 │       │       ├── help_page.py
 │       │       └── settings_page.py
 │       └── services/
-│           ├── camera_service.py         # frame capture + outlier rejection
-│           ├── image_stats.py            # full-image gray / saturated-fraction stats
+│           ├── camera_service.py         # frame capture + σ-clipping
+│           ├── image_stats.py            # hotspot, gray mean, saturation
 │           ├── calculation_service.py    # Beer–Lambert + sRGB linearisation
-│           ├── plausibility_service.py   # saturation / signal / range checks
+│           ├── plausibility_service.py   # saturation / signal / swap checks
 │           ├── calibration_service.py    # linear-regression correction model
-│           ├── msa_service.py            # Cg / Cgk / %Var / t-test
+│           ├── msa_service.py            # Cg, Cgk, %Var, t-test
 │           ├── linearity_service.py      # campaign-level linearity report
 │           ├── database_service.py       # SQLite schema + CRUD
 │           ├── material_service.py       # refractiveindex.info catalog loader
@@ -213,8 +231,8 @@ The application follows a service-oriented MVC-style layout:
 
 - **Services** are stateless or self-contained business-logic units —
   they can be unit-tested without any Qt dependency. Examples:
-  `CalculationService` runs the Beer-Lambert math, `MSAService`
-  computes Cg/Cgk.
+  `CalculationService` runs the Beer–Lambert math; `MSAService`
+  computes Cg and Cgk.
 - **Widgets** (`gui/widgets/`) are pure UI: they emit signals and expose
   setter methods, but never call services directly.
 - **Controller** wires the two together: it owns the service instances,
@@ -230,11 +248,11 @@ The application follows a service-oriented MVC-style layout:
 
 The `database_service` owns three tables:
 
-| Table | Purpose |
-|---|---|
-| `measurements` | one row per captured measurement (raw + corrected layer values, gray statistics, frame counts, material catalog triple, optional reference thickness, session tag, probe, run index) |
-| `calibrations` | saved linear correction models (slope, intercept, R², fitted range, material/wavelength/mode, active flag) |
-| `msa_runs` | (optional, for archival) saved Type 1 MSA reports |
+| Table          | Purpose                                                                                                                                                                                  |
+|----------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `measurements` | one row per captured measurement (raw + corrected layer values, hotspot and gray statistics for ref and sample, frame counts, material catalog triple, optional reference thickness, session tag, probe, run index) |
+| `calibrations` | saved linear correction models (slope, intercept, R², fitted range, material / wavelength / mode, active flag)                                                                            |
+| `msa_runs`     | (optional, for archival) saved Type 1 MSA reports                                                                                                                                         |
 
 Schema migrations run automatically at startup — the service inspects
 existing columns and adds new ones in place. No manual migration step.
@@ -244,13 +262,13 @@ existing columns and adds new ones in place. No manual migration step.
 Tunable thresholds live in `config/config.py` as `AppConfig` class
 attributes:
 
-| Constant | Default | Purpose |
-|---|---|---|
-| `FRAME_COUNT_DEFAULT` | 30 | Default frames per multi-frame capture |
-| `PLAUSIBILITY_SAT_FRAC_ERR` | 0.0050 | Saturated-pixel fraction error threshold |
-| `PLAUSIBILITY_GRAY_MEAN_MIN` | 0.5 | Minimum full-image gray mean (noise floor) |
-| `WAVELENGTHS` | 635 nm, 532 nm | Selectable wavelengths |
-| `DB_PATH` | `data/measurements.db` | SQLite file location |
+| Constant                       | Default                  | Purpose                                       |
+|--------------------------------|--------------------------|-----------------------------------------------|
+| `FRAME_COUNT_DEFAULT`          | 30                       | Default frames per multi-frame capture        |
+| `PLAUSIBILITY_SAT_FRAC_ERR`    | 0.0050                   | Saturated-pixel fraction error threshold      |
+| `PLAUSIBILITY_GRAY_MEAN_MIN`   | 0.5                      | Minimum full-image gray mean (noise floor)    |
+| `WAVELENGTHS`                  | 635 nm, 532 nm           | Selectable wavelengths                         |
+| `DB_PATH`                      | `data/measurements.db`   | SQLite file location                          |
 
 ## Logging
 
@@ -289,4 +307,4 @@ Issues and pull requests are welcome. When opening a PR:
 
 ## License
 
-See `LICENSE` for details.
+See `LICENSE` for details. The project is released under the MIT License.

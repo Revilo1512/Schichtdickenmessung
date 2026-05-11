@@ -55,17 +55,17 @@ PROFILES: dict[tuple[str, str, str], MaterialProfile] = {
         page                     = "Johnson",
         label                    = "Cu (Johnson & Christy)",
         supported_wavelengths_um = (0.635, 0.532),
-        expected_range_nm        = (20.0, 120.0),
+        expected_range_nm        = (0.0, 10.0),
         saturation_frac_err      = 0.0050,
         gray_mean_min            = 0.5,
         notes                    = "Tune saturation_frac_err against your beam intensity.",
     ),
 
-    ("main", "Ti", "Rakic-LD"): MaterialProfile(
+    ("main", "Ti", "Johnson"): MaterialProfile(
         shelf                    = "main",
         book                     = "Ti",
-        page                     = "Rakic-LD",
-        label                    = "Ti (Rakic Lorentz-Drude)",
+        page                     = "Johnson",
+        label                    = "Ti (Johnson & Christy)",
         supported_wavelengths_um = (0.635, 0.532),
         expected_range_nm        = (15.0, 100.0),
         saturation_frac_err      = 0.0050,
